@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package mics.node.v1;
+
+option csharp_namespace = "Mics.Contracts.Node.V1";
+
+import "Protos/mics_message.proto";
+
+message ForwardAck {
+  bool ok = 1;
+  string reason = 2;
+}
+
+message ForwardSingleRequest {
+  string tenant_id = 1;
+  string to_user_id = 2;
+  mics.message.v1.MessageRequest message = 3;
+}
+
+message ForwardBatchRequest {
+  string tenant_id = 1;
+  repeated string to_user_ids = 2; // 群聊：该节点上需要投递的成员
+  mics.message.v1.MessageRequest message = 3;
+}
+
+message BufferOfflineRequest {
+  string tenant_id = 1;
+  string to_user_id = 2;
+  bytes server_frame = 3; // mics.message.v1.ServerFrame 序列化
+  int32 ttl_seconds = 4;  // 缓冲 TTL（秒）
+}
+
+message DrainOfflineRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+}
+
+message DrainOfflineResponse {
+  repeated bytes server_frames = 1; // mics.message.v1.ServerFrame 序列化
+}
+
+service NodeGateway {
+  rpc ForwardSingle(ForwardSingleRequest) returns (ForwardAck);
+  rpc ForwardBatch(ForwardBatchRequest) returns (ForwardAck);
+  rpc BufferOffline(BufferOfflineRequest) returns (ForwardAck);
+  rpc DrainOffline(DrainOfflineRequest) returns (DrainOfflineResponse);
+}

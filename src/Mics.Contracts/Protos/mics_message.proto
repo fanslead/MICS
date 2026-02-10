@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package mics.message.v1;
+
+option csharp_namespace = "Mics.Contracts.Message.V1";
+
+enum MessageType {
+  SINGLE_CHAT = 0;
+  GROUP_CHAT = 1;
+}
+
+enum AckStatus {
+  SENT = 0;   // gateway accepted & delivered/buffered
+  FAILED = 1; // gateway rejected or delivery failed
+}
+
+message MessageRequest {
+  string tenant_id = 1;     // required
+  string user_id = 2;       // required
+  string device_id = 3;     // required
+  string msg_id = 4;        // optional: gateway fills if empty
+  MessageType msg_type = 5; // required: single/group
+  string to_user_id = 6;    // required for single chat
+  string group_id = 7;      // required for group chat
+  bytes msg_body = 8;
+  int64 timestamp_ms = 9;
+}
+
+message MessageAck {
+  string msg_id = 1;
+  AckStatus status = 2;
+  int64 timestamp_ms = 3;
+  string reason = 4;
+}
+
+message ConnectAck {
+  int32 code = 1; // 1000=success
+  string tenant_id = 2;
+  string user_id = 3;
+  string device_id = 4;
+  string node_id = 5;
+  string trace_id = 6;
+}
+
+message MessageDelivery {
+  MessageRequest message = 1;
+}
+
+message ServerError {
+  int32 code = 1;
+  string message = 2;
+}
+
+message ClientFrame {
+  oneof payload {
+    MessageRequest message = 1;
+    HeartbeatPing heartbeat_ping = 2;
+  }
+}
+
+message ServerFrame {
+  oneof payload {
+    ConnectAck connect_ack = 1;
+    MessageDelivery delivery = 2;
+    MessageAck ack = 3;
+    ServerError error = 4;
+    HeartbeatPong heartbeat_pong = 5;
+  }
+}
+
+message HeartbeatPing {
+  int64 timestamp_ms = 1;
+}
+
+message HeartbeatPong {
+  int64 timestamp_ms = 1;
+}
+

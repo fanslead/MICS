@@ -1,0 +1,13 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mics-gateway
+spec:
+  selector:
+    matchLabels:
+      app: mics-gateway
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+

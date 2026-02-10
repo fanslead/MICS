@@ -1,0 +1,57 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mics-gateway
+spec:
+  groups:
+    - name: mics-gateway.rules
+      rules:
+        - alert: MicsGatewayHookFailureRateHigh
+          expr: |
+            (
+              sum by (tenant, op) (rate(mics_hook_requests_total{result!="ok"}[5m]))
+            /
+              sum by (tenant, op) (rate(mics_hook_requests_total[5m]))
+            ) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "HTTP Hook failure rate high (tenant={{$labels.tenant}} op={{$labels.op}})"
+            description: "Hook non-ok ratio > 5% for 10m."
+
+        - alert: MicsGatewayGrpcForwardFailures
+          expr: sum by (tenant, status) (rate(mics_grpc_forward_failed_total[5m])) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "gRPC forward failures (tenant={{$labels.tenant}} status={{$labels.status}})"
+            description: "gRPC forward failures > 1/s for 5m."
+
+        - alert: MicsGatewayWsHeartbeatTimeouts
+          expr: sum by (tenant) (rate(mics_ws_heartbeat_timeouts_total[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "WS heartbeat timeouts detected (tenant={{$labels.tenant}})"
+            description: "At least one heartbeat timeout occurred in the last 5m."
+
+        - alert: MicsGatewayDeadNodeCleanupDetected
+          expr: increase(mics_dead_node_cleanups_total[10m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dead node cleanup ran"
+            description: "At least one dead-node cleanup executed in last 10m (possible node crash or network partition)."
+
+        - alert: MicsGatewayRateLimitingHigh
+          expr: sum by (tenant, kind) (rate(mics_rate_limited_total[5m])) > 10
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Rate limiting high (tenant={{$labels.tenant}} kind={{$labels.kind}})"
+            description: "Rate limited events > 10/s for 5m."
+

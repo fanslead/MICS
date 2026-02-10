@@ -1,0 +1,19 @@
+<view class="container">
+  <view class="row"><text class="label">URL</text><input class="input" value="{{url}}" bindinput="onUrlInput" /></view>
+  <view class="row"><text class="label">Tenant</text><input class="input" value="{{tenantId}}" bindinput="onTenantInput" /></view>
+  <view class="row"><text class="label">Token</text><input class="input" value="{{token}}" bindinput="onTokenInput" /></view>
+  <view class="row"><text class="label">Device</text><input class="input" value="{{deviceId}}" bindinput="onDeviceInput" /></view>
+  <view class="row"><text class="label">ToUser</text><input class="input" value="{{toUserId}}" bindinput="onToUserInput" /></view>
+  <view class="row"><text class="label">Message</text><input class="input" value="{{message}}" bindinput="onMessageInput" /></view>
+
+  <view class="buttons">
+    <button size="mini" bindtap="connect">Connect</button>
+    <button size="mini" bindtap="send">Send</button>
+    <button size="mini" bindtap="disconnect">Disconnect</button>
+  </view>
+
+  <view class="log">
+    <text>{{log}}</text>
+  </view>
+</view>
+

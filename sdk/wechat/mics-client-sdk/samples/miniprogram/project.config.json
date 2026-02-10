@@ -1,0 +1,10 @@
+{
+  "description": "MICS WeChat Mini Program sample",
+  "setting": {
+    "urlCheck": false
+  },
+  "compileType": "miniprogram",
+  "appid": "touristappid",
+  "projectname": "mics-sample"
+}
+

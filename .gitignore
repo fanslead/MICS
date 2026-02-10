@@ -1,0 +1,31 @@
+**/bin/
+**/obj/
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Node (TS SDK)
+**/node_modules/
+**/dist/
+sdk/ts/.vite/
+**/package-lock.json
+
+# Java
+**/target/
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+
+# WeChat Mini Program
+**/miniprogram_npm/
+
+# Gradle / Kotlin
+**/.gradle/
+**/build/
+.kotlin/
+local.properties

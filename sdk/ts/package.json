@@ -1,0 +1,20 @@
+{
+  "name": "@mics/sdk-ts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "dev": "vite --config samples/web/vite.config.ts"
+  },
+  "dependencies": {
+    "protobufjs": "7.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.0.0",
+    "typescript": "5.9.2",
+    "vite": "7.0.0",
+    "vitest": "3.2.4"
+  }
+}

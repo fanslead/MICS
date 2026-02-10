@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mics-gateway-config
+data:
+  PORT: "8080"
+  # Redis for global online routing (required).
+  REDIS__CONNECTION: "redis:6379"
+  # Per-tenant auth hook URL map (required in MVP).
+  # NOTE: Keep this per-tenant for isolation.
+  TENANT_AUTH_MAP: "{\"t1\":\"http://hookmock:8081\"}"
+  # Optional hook signing.
+  HOOK_SIGN_REQUIRED: "false"
+  # Optional: WebSocket keepalive ping interval (0=disable).
+  WS_KEEPALIVE_INTERVAL_SECONDS: "30"
+  # Optional: safety limits (0=disable). Default is 1MiB.
+  MAX_MESSAGE_BYTES: "1048576"
+  # Optional: per (tenant,user) in-memory offline buffer caps (0=disable).
+  OFFLINE_BUFFER_MAX_MESSAGES_PER_USER: "128"
+  OFFLINE_BUFFER_MAX_BYTES_PER_USER: "1048576"
+  # Optional: group fanout tuning.
+  GROUP_ROUTE_CHUNK_SIZE: "256"
+  GROUP_MEMBERS_MAX_USERS: "200000"
+  GROUP_OFFLINE_BUFFER_MAX_USERS: "1024"
+  # Optional: hook isolation defaults.
+  HOOK_MAX_CONCURRENCY: "32"
+  HOOK_QUEUE_TIMEOUT_MS: "10"
+  # Optional: graceful drain timeout on shutdown (0=skip drain).
+  DRAIN_TIMEOUT_SECONDS: "10"
+  # Optional: Kafka MQ hook (producer). Leave empty to disable.
+  # KAFKA__BOOTSTRAP_SERVERS: "kafka:9092"
+  # KAFKA_MAX_ATTEMPTS: "3"
+  # KAFKA_QUEUE_CAPACITY: "50000"
+  # KAFKA_RETRY_BACKOFF_MS: "50"
+  # KAFKA_IDLE_DELAY_MS: "5"

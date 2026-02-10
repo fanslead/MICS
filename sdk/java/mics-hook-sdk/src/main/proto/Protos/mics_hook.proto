@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package mics.hook.v1;
+
+option csharp_namespace = "Mics.Contracts.Hook.V1";
+option java_package = "com.mics.contracts.hook.v1";
+option java_multiple_files = true;
+option java_outer_classname = "MicsHookProto";
+
+import "Protos/mics_message.proto";
+
+// Shared metadata for HTTP hooks.
+// `sign` is an HMAC-SHA256 signature (Base64) used for tamper protection.
+message HookMeta {
+  string tenant_id = 1;
+  string request_id = 2;
+  int64 timestamp_ms = 3;
+  string sign = 4;
+  // TraceId propagated from gateway for end-to-end observability.
+  string trace_id = 5;
+}
+
+// Tenant runtime configuration returned by /auth and used by the gateway.
+message TenantRuntimeConfig {
+  // Hook isolation policies (optional overrides; fall back to gateway defaults if unset).
+  optional int32 hook_max_concurrency = 8;
+  optional int32 hook_queue_timeout_ms = 9;
+  optional int32 hook_breaker_failure_threshold = 10;
+  optional int32 hook_breaker_open_ms = 11;
+  optional bool hook_sign_required = 12;
+
+  // Base URL for subsequent HTTP hooks (check-message / get-group-members).
+  string hook_base_url = 1;
+  // Heartbeat timeout (seconds).
+  int32 heartbeat_timeout_seconds = 2;
+  // Offline buffer TTL (seconds).
+  int32 offline_buffer_ttl_seconds = 3;
+  // Tenant max connections limit.
+  int32 tenant_max_connections = 4;
+  // Per-user max connections limit.
+  int32 user_max_connections = 5;
+  // Tenant message QPS limit.
+  int32 tenant_max_message_qps = 6;
+  // Tenant secret for HMAC signing (MVP may deliver plaintext; production should use KMS).
+  string tenant_secret = 7;
+}
+
+// 6.3.1 Sync HTTP Hook: /auth
+message AuthRequest {
+  HookMeta meta = 1;
+  string token = 2;
+  string device_id = 3;
+}
+
+message AuthResponse {
+  HookMeta meta = 1;
+  bool ok = 2;
+  string user_id = 3;
+  string device_id = 4;
+  TenantRuntimeConfig config = 5;
+  string reason = 6;
+}
+
+// 6.3.1 Sync HTTP Hook: /check-message
+message CheckMessageRequest {
+  HookMeta meta = 1;
+  mics.message.v1.MessageRequest message = 2;
+}
+
+message CheckMessageResponse {
+  HookMeta meta = 1;
+  bool allow = 2;
+  string reason = 3;
+}
+
+// 6.3.1 Sync HTTP Hook: /get-group-members
+message GetGroupMembersRequest {
+  HookMeta meta = 1;
+  string group_id = 2;
+}
+
+message GetGroupMembersResponse {
+  HookMeta meta = 1;
+  repeated string user_ids = 2;
+}
+
+// 6.3.2 Async MQ Hook: per-tenant Topic `im-mics-{TenantId}-event`
+//
+// `sign` is optional but recommended for tamper protection.
+// Signing rule (gateway side):
+//   - Clone the event and clear `sign`
+//   - Compute Base64(HMACSHA256(tenant_secret, Serialize(clone)))
+message MqEvent {
+  string tenant_id = 1;     // required
+  EventType event_type = 2; // required
+  string msg_id = 3;        // required for message events
+  string user_id = 4;       // required
+  string device_id = 5;     // required
+  string to_user_id = 6;    // required for single-chat events
+  string group_id = 7;      // required for group-chat events
+  bytes event_data = 8;     // required (Protobuf-encoded payload)
+  int64 timestamp = 9;      // required (Unix ms)
+  string node_id = 10;      // required
+  string sign = 11;         // optional HMAC signature (Base64)
+  string trace_id = 12;     // optional, propagated from gateway for tracing
+}
+
+enum EventType {
+  CONNECT_ONLINE = 0;
+  CONNECT_OFFLINE = 1;
+  SINGLE_CHAT_MSG = 2;
+  GROUP_CHAT_MSG = 3;
+}
+

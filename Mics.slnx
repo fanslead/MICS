@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Mics.Contracts/Mics.Contracts.csproj" />
+    <Project Path="src/Mics.Gateway/Mics.Gateway.csproj" />
+    <Project Path="src/Mics.HookMock/Mics.HookMock.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Mics.Tests/Mics.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Mics.LoadTester/Mics.LoadTester.csproj" />
+  </Folder>
+  <Folder Name="/sdk/">
+    <Folder Name="/sdk/dotnet/">
+      <Project Path="sdk/dotnet/Mics.Client/Mics.Client.csproj" />
+      <Project Path="sdk/dotnet/Mics.HookSdk/Mics.HookSdk.csproj" />
+      <Folder Name="/sdk/dotnet/samples/">
+        <Project Path="sdk/dotnet/samples/Mics.ClientSample/Mics.ClientSample.csproj" />
+        <Project Path="sdk/dotnet/samples/Mics.HookSample/Mics.HookSample.csproj" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Solution>
