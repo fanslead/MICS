@@ -84,6 +84,9 @@ public sealed class WsGroupFanoutLimitsTests
 
         public ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken) =>
             new(new GroupMembersResult(true, false, "", _members));
+
+        public ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken) =>
+            new(new GetOfflineMessagesResult(true, false, "", Array.Empty<MessageRequest>(), "", false));
     }
 
     private sealed class AllowDedup : IMessageDeduplicator
@@ -184,7 +187,7 @@ public sealed class WsGroupFanoutLimitsTests
 
         var metrics = new MetricsRegistry();
         var offline = new CountingOfflineStore();
-        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
+        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
 
         var handler = new WsGatewayHandler(
             nodeId: "node-1",
@@ -236,7 +239,7 @@ public sealed class WsGroupFanoutLimitsTests
         var metrics = new MetricsRegistry();
         var offline = new CountingOfflineStore();
         var routes = new BlockingBatchRoutes();
-        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
+        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
 
         var handler = new WsGatewayHandler(
             nodeId: "node-1",

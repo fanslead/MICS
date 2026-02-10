@@ -16,11 +16,14 @@ internal sealed record CheckMessageResult(bool Allow, bool Degraded, string Reas
 
 internal sealed record GroupMembersResult(bool Ok, bool Degraded, string Reason, IReadOnlyList<string> UserIds);
 
+internal sealed record GetOfflineMessagesResult(bool Ok, bool Degraded, string Reason, IReadOnlyList<MessageRequest> Messages, string NextCursor, bool HasMore);
+
 internal interface IHookClient
 {
     ValueTask<AuthResult> AuthAsync(string authHookBaseUrl, string tenantId, string token, string deviceId, CancellationToken cancellationToken);
     ValueTask<CheckMessageResult> CheckMessageAsync(TenantRuntimeConfig tenantConfig, string tenantId, MessageRequest message, CancellationToken cancellationToken);
     ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken);
+    ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken);
 }
 
 internal sealed class HookClient : IHookClient
@@ -284,6 +287,73 @@ internal sealed class HookClient : IHookClient
         }
     }
 
+    public async ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(
+        TenantRuntimeConfig tenantConfig,
+        string tenantId,
+        string userId,
+        string deviceId,
+        int maxMessages,
+        string cursor,
+        CancellationToken cancellationToken)
+    {
+        var policy = _policies.Resolve(tenantId, tenantConfig);
+
+        if (!_breaker.TryBegin(tenantId, HookOperation.GetOfflineMessages))
+        {
+            RecordFailure(tenantId, HookOperation.GetOfflineMessages, result: "circuit_open", url: tenantConfig.HookBaseUrl, requestId: "");
+            return new GetOfflineMessagesResult(false, true, "hook circuit open", Array.Empty<MessageRequest>(), "", false);
+        }
+
+        try
+        {
+            var meta = _metaFactory.Create(tenantId);
+            var request = new GetOfflineMessagesRequest
+            {
+                Meta = meta,
+                UserId = userId,
+                DeviceId = deviceId ?? "",
+                MaxMessages = maxMessages > 0 ? maxMessages : 100,
+                Cursor = cursor ?? "",
+            };
+
+            if (!string.IsNullOrWhiteSpace(tenantConfig.TenantSecret))
+            {
+                request.Meta.Sign = HmacSign.ComputeBase64(tenantConfig.TenantSecret, request.Meta, PayloadForSign(request));
+            }
+            else if (policy.SignRequired)
+            {
+                RecordFailure(tenantId, HookOperation.GetOfflineMessages, result: "sign_required", url: tenantConfig.HookBaseUrl, requestId: request.Meta.RequestId);
+                _breaker.OnFailure(tenantId, HookOperation.GetOfflineMessages, policy.Breaker);
+                return new GetOfflineMessagesResult(false, false, "hook sign required", Array.Empty<MessageRequest>(), "", false);
+            }
+
+            var url = tenantConfig.HookBaseUrl.TrimEnd('/') + "/get-offline-messages";
+            var post = await PostAsync(url, HookOperation.GetOfflineMessages, tenantId, policy.Acquire, request, GetOfflineMessagesResponse.Parser, cancellationToken);
+            if (post.Response is null)
+            {
+                if (ShouldCountFailureForBreaker(post.Outcome))
+                {
+                    _breaker.OnFailure(tenantId, HookOperation.GetOfflineMessages, policy.Breaker);
+                }
+
+                RecordFailure(tenantId, HookOperation.GetOfflineMessages, ResultLabel(post.Outcome), url, request.Meta.RequestId);
+                return post.Outcome switch
+                {
+                    HookPostOutcome.QueueRejected => new GetOfflineMessagesResult(false, true, "hook queue rejected", Array.Empty<MessageRequest>(), "", false),
+                    HookPostOutcome.Canceled => new GetOfflineMessagesResult(false, true, "canceled", Array.Empty<MessageRequest>(), "", false),
+                    _ => new GetOfflineMessagesResult(false, true, "hook degraded", Array.Empty<MessageRequest>(), "", false),
+                };
+            }
+
+            _breaker.OnSuccess(tenantId, HookOperation.GetOfflineMessages);
+            return new GetOfflineMessagesResult(post.Response.Ok, false, post.Response.Reason, post.Response.Messages, post.Response.NextCursor, post.Response.HasMore);
+        }
+        finally
+        {
+            _breaker.EndAttempt(tenantId, HookOperation.GetOfflineMessages);
+        }
+    }
+
     private async ValueTask<HookPostResult<TResponse>> PostAsync<TRequest, TResponse>(
         string url,
         HookOperation op,
@@ -419,6 +489,16 @@ internal sealed class HookClient : IHookClient
     }
 
     private static GetGroupMembersRequest PayloadForSign(GetGroupMembersRequest request)
+    {
+        var clone = request.Clone();
+        if (clone.Meta is not null)
+        {
+            clone.Meta.Sign = "";
+        }
+        return clone;
+    }
+
+    private static GetOfflineMessagesRequest PayloadForSign(GetOfflineMessagesRequest request)
     {
         var clone = request.Clone();
         if (clone.Meta is not null)

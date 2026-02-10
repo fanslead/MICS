@@ -136,6 +136,50 @@ public static class MicsHookEndpointMappings
         });
     }
 
+    public static IEndpointConventionBuilder MapMicsGetOfflineMessages(
+        this IEndpointRouteBuilder endpoints,
+        Func<GetOfflineMessagesRequest, CancellationToken, ValueTask<GetOfflineMessagesResponse>> handler,
+        MicsHookMapOptions options,
+        string pattern = "/get-offline-messages")
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(handler);
+        ArgumentNullException.ThrowIfNull(options);
+
+        return endpoints.MapPost(pattern, async (HttpContext ctx) =>
+        {
+            var req = await HookProtobufHttp.ReadAsync(GetOfflineMessagesRequest.Parser, ctx.Request, ctx.RequestAborted);
+            var tenantId = req.Meta?.TenantId ?? "";
+            var (ok, secretOrReason) = ResolveSecret(options, tenantId);
+
+            if (!ok)
+            {
+                await HookProtobufHttp.WriteAsync(new GetOfflineMessagesResponse
+                {
+                    Meta = EchoMeta(req.Meta),
+                    Ok = false,
+                    Reason = secretOrReason,
+                }, ctx.Response, ctx.RequestAborted);
+                return;
+            }
+
+            if (!VerifyOrReject(options, secretOrReason, req.Meta, PayloadForSign(req), out var rejectReason))
+            {
+                await HookProtobufHttp.WriteAsync(new GetOfflineMessagesResponse
+                {
+                    Meta = EchoMeta(req.Meta),
+                    Ok = false,
+                    Reason = rejectReason,
+                }, ctx.Response, ctx.RequestAborted);
+                return;
+            }
+
+            var resp = await handler(req, ctx.RequestAborted);
+            resp.Meta ??= EchoMeta(req.Meta);
+            await HookProtobufHttp.WriteAsync(resp, ctx.Response, ctx.RequestAborted);
+        });
+    }
+
     private static (bool Ok, string SecretOrReason) ResolveSecret(MicsHookMapOptions options, string tenantId)
     {
         if (string.IsNullOrWhiteSpace(tenantId))
@@ -208,6 +252,16 @@ public static class MicsHookEndpointMappings
     }
 
     private static GetGroupMembersRequest PayloadForSign(GetGroupMembersRequest request)
+    {
+        var clone = request.Clone();
+        if (clone.Meta is not null)
+        {
+            clone.Meta.Sign = "";
+        }
+        return clone;
+    }
+
+    private static GetOfflineMessagesRequest PayloadForSign(GetOfflineMessagesRequest request)
     {
         var clone = request.Clone();
         if (clone.Meta is not null)

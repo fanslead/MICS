@@ -1,6 +1,6 @@
 # mics-hook-sdk (Java)
 
-服务端 Hook SDK：用于业务方实现 MICS 的同步 HTTP Hook（`/auth`、`/check-message`、`/get-group-members`）以及消费 MQ Hook（Kafka）事件时的 Protobuf 解析与验签。
+服务端 Hook SDK：用于业务方实现 MICS 的同步 HTTP Hook（`/auth`、`/check-message`、`/get-group-members`、`/get-offline-messages`）以及消费 MQ Hook（Kafka）事件时的 Protobuf 解析与验签。
 
 ## HTTP Hook 签名/验签
 
@@ -34,4 +34,3 @@ server.start();
 ```
 
 一键示例：`sdk/java/samples/hook-server`
-

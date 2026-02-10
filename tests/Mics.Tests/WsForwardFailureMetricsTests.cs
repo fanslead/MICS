@@ -91,6 +91,9 @@ public sealed class WsForwardFailureMetricsTests
 
         public ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken) =>
+            new(new GetOfflineMessagesResult(true, false, "", Array.Empty<MessageRequest>(), "", false));
     }
 
     private sealed class AllowDedup : IMessageDeduplicator
@@ -246,7 +249,7 @@ public sealed class WsForwardFailureMetricsTests
             offline: new NoopOffline(),
             rateLimiter: new AllowRateLimiter(),
             dedup: new AllowDedup(),
-            mq: new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero)),
+            mq: new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero)),
             metrics: metrics,
             logger: NullLogger<WsGatewayHandler>.Instance,
             traceContext: new TraceContext(),

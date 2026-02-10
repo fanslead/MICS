@@ -23,6 +23,7 @@ type TenantRuntimeConfig struct {
 	HookBreakerFailureThreshold *int32
 	HookBreakerOpenMs          *int32
 	HookSignRequired           *bool
+	OfflineUseHookPull         *bool
 }
 
 type AuthRequest struct {
@@ -63,6 +64,23 @@ type GetGroupMembersResponse struct {
 	UserIDs []string
 }
 
+type GetOfflineMessagesRequest struct {
+	Meta        HookMeta
+	UserID      string
+	DeviceID    string
+	MaxMessages int32
+	Cursor      string
+}
+
+type GetOfflineMessagesResponse struct {
+	Meta             HookMeta
+	Ok               bool
+	MessagesWireBytes [][]byte
+	Reason           string
+	NextCursor       string
+	HasMore          bool
+}
+
 type EventType int32
 
 const (
@@ -70,6 +88,7 @@ const (
 	EventConnectOffline EventType = 1
 	EventSingleChatMsg  EventType = 2
 	EventGroupChatMsg   EventType = 3
+	EventOfflineMessage EventType = 4
 )
 
 type MqEvent struct {
@@ -86,4 +105,3 @@ type MqEvent struct {
 	Sign      string
 	TraceID   string
 }
-

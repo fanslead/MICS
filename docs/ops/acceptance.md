@@ -76,6 +76,18 @@ dotnet run --project tools/Mics.LoadTester -- --url ws://localhost:8080/ws --ten
 - 指标：`mics_group_messages_total`、`mics_group_members_total`、`mics_group_fanout_nodes_total`
 - 离线缓冲行为：`mics_group_offline_buffered_total` / `mics_group_offline_buffer_skipped_total` / `mics_offline_buffer_skipped_total`
 
+### 1.5 离线消息（方案三：best-effort）
+
+目标：验证「离线事件通知（MQ）」+「上线拉取补发（Hook）」的 best-effort 链路不阻塞核心转发，且租户隔离。
+
+前置：租户在 `/auth` 返回的 `TenantRuntimeConfig.offline_use_hook_pull=true`（HookMock 可通过环境变量 `OFFLINE_USE_HOOK_PULL=true` 便捷开启）。
+
+观察：
+- MQ 侧：`mics_mq_published_total{event_type="OfflineMessage"}` / `mics_mq_dropped_total{reason="tenant_quota"|"queue_full"}`
+- Gateway 侧：`mics_offline_notified_total`（离线事件入队成功）
+- Hook 拉取：`mics_hook_requests_total{op="GetOfflineMessages",result="ok"|"timeout"|...}`、`mics_hook_get_offline_messages_total{result="ok"|"fail"|"degraded"}`
+- 补发计数：`mics_offline_drained_from_hook_total`（Hook补发）与 `mics_offline_drained_total`（本地短期缓冲回退补发）
+
 ## 2. Hook 降级/熔断验收（8.1 / 5.2）
 
 目标：Hook 超时/失败不会阻塞核心转发链路，并且有可观测性。

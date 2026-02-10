@@ -89,6 +89,9 @@ public sealed class WsAckSemanticsTests
 
         public ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private sealed class ThrowingDedup : IMessageDeduplicator
@@ -153,6 +156,9 @@ public sealed class WsAckSemanticsTests
 
         public ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken) =>
+            new(new GetOfflineMessagesResult(true, false, "", Array.Empty<MessageRequest>(), "", false));
     }
 
     private sealed class AllowDedup : IMessageDeduplicator
@@ -220,6 +226,9 @@ public sealed class WsAckSemanticsTests
             await _membersRelease.Task;
             return new GroupMembersResult(Ok: true, Degraded: false, Reason: "", UserIds: _members);
         }
+
+        public ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken) =>
+            new(new GetOfflineMessagesResult(true, false, "", Array.Empty<MessageRequest>(), "", false));
     }
 
     [Fact]
@@ -409,7 +418,7 @@ public sealed class WsAckSemanticsTests
     private static WsGatewayHandler CreateHandler(IHookClient hook, IMessageDeduplicator dedup, IRedisRateLimiter rateLimiter)
     {
         var metrics = new MetricsRegistry();
-        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
+        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
 
         return new WsGatewayHandler(
             nodeId: "node-1",
@@ -438,7 +447,7 @@ public sealed class WsAckSemanticsTests
     private static WsGatewayHandler CreateHandler(IHookClient hook, IConnectionRegistry connections, IOnlineRouteStore routes, IMessageDeduplicator dedup, IRedisRateLimiter rateLimiter)
     {
         var metrics = new MetricsRegistry();
-        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
+        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
 
         return new WsGatewayHandler(
             nodeId: "node-1",

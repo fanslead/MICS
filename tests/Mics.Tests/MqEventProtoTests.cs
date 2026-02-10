@@ -26,6 +26,12 @@ public sealed class MqEventProtoTests
         Assert.Contains("int64 timestamp = 9;", text, StringComparison.Ordinal);
         Assert.Contains("string node_id = 10;", text, StringComparison.Ordinal);
         Assert.Contains("string sign = 11;", text, StringComparison.Ordinal);
+        Assert.Contains("OFFLINE_MESSAGE = 4;", text, StringComparison.Ordinal);
+
+        // Offline hook pull contract (best-effort, opt-in)
+        Assert.Contains("optional bool offline_use_hook_pull = 13;", text, StringComparison.Ordinal);
+        Assert.Matches(new Regex(@"\bmessage\s+GetOfflineMessagesRequest\b", RegexOptions.CultureInvariant), text);
+        Assert.Matches(new Regex(@"\bmessage\s+GetOfflineMessagesResponse\b", RegexOptions.CultureInvariant), text);
     }
 
     private static string FindRepoRoot()

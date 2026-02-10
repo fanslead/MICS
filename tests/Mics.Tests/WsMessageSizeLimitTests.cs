@@ -56,7 +56,7 @@ public sealed class WsMessageSizeLimitTests
             offline: new NoopOffline(),
             rateLimiter: new AllowRateLimiter(),
             dedup: new AllowDedup(),
-            mq: new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero)),
+            mq: new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero)),
             metrics: metrics,
             logger: NullLogger<WsGatewayHandler>.Instance,
             traceContext: new TraceContext(),
@@ -109,7 +109,7 @@ public sealed class WsMessageSizeLimitTests
             offline: new NoopOffline(),
             rateLimiter: new AllowRateLimiter(),
             dedup: new AllowDedup(),
-            mq: new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero)),
+            mq: new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero)),
             metrics: metrics,
             logger: NullLogger<WsGatewayHandler>.Instance,
             traceContext: new TraceContext(),
@@ -209,6 +209,9 @@ public sealed class WsMessageSizeLimitTests
             throw new NotSupportedException();
 
         public ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
     }
 

@@ -181,4 +181,35 @@ public sealed class HookSigningTests
         Assert.False(res.Degraded);
         Assert.Contains("sign required", res.Reason, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task GetOfflineMessages_Fails_WhenSignRequiredButMissingTenantSecret()
+    {
+        var metaFactory = new FixedMetaFactory(new HookMeta { TenantId = "", RequestId = "r1", TimestampMs = 123, Sign = "" });
+        var secrets = new MapSecrets(new Dictionary<string, string>());
+        var breaker = new HookCircuitBreaker(TimeProvider.System);
+        var policies = new TenantHookPolicyCache(new HookPolicyDefaults(
+            MaxConcurrencyDefault: 8,
+            TenantMaxConcurrencyFallback: new Dictionary<string, int>(),
+            QueueTimeoutDefault: TimeSpan.FromSeconds(1),
+            BreakerFailureThresholdDefault: 5,
+            BreakerOpenDurationDefault: TimeSpan.FromSeconds(5),
+            SignRequiredDefault: true));
+
+        var http = new HttpClient(new CaptureHandler
+        {
+            OnSendAsync = _ => throw new Exception("should not send")
+        })
+        { Timeout = Timeout.InfiniteTimeSpan };
+
+        var metrics = new MetricsRegistry();
+        var limiter = new HookConcurrencyLimiter(metrics);
+        var client = new HookClient(http, TimeSpan.FromMilliseconds(150), breaker, metaFactory, secrets, policies, limiter, metrics, NullLogger<HookClient>.Instance, TimeProvider.System);
+
+        var cfg = new TenantRuntimeConfig { HookBaseUrl = "http://localhost:8081", TenantSecret = "" };
+        var res = await client.GetOfflineMessagesAsync(cfg, "t1", userId: "u1", deviceId: "d1", maxMessages: 100, cursor: "", CancellationToken.None);
+        Assert.False(res.Ok);
+        Assert.False(res.Degraded);
+        Assert.Contains("sign required", res.Reason, StringComparison.OrdinalIgnoreCase);
+    }
 }

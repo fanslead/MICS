@@ -6,6 +6,7 @@ export enum EventType {
   CONNECT_OFFLINE = 1,
   SINGLE_CHAT_MSG = 2,
   GROUP_CHAT_MSG = 3,
+  OFFLINE_MESSAGE = 4,
   UNRECOGNIZED = -1,
 }
 
@@ -31,6 +32,7 @@ export interface TenantRuntimeConfig {
   hookBreakerFailureThreshold?: number;
   hookBreakerOpenMs?: number;
   hookSignRequired?: boolean;
+  offlineUseHookPull?: boolean;
 }
 
 export interface AuthRequest {
@@ -67,6 +69,23 @@ export interface GetGroupMembersRequest {
 export interface GetGroupMembersResponse {
   meta?: HookMeta;
   userIds: string[];
+}
+
+export interface GetOfflineMessagesRequest {
+  meta?: HookMeta;
+  userId: string;
+  deviceId: string;
+  maxMessages: number;
+  cursor: string;
+}
+
+export interface GetOfflineMessagesResponse {
+  meta?: HookMeta;
+  ok: boolean;
+  messages: MessageRequest[];
+  reason: string;
+  nextCursor: string;
+  hasMore: boolean;
 }
 
 export interface MqEvent {
@@ -142,6 +161,7 @@ function createBaseTenantRuntimeConfig(): TenantRuntimeConfig {
     hookBreakerFailureThreshold: undefined,
     hookBreakerOpenMs: undefined,
     hookSignRequired: undefined,
+    offlineUseHookPull: undefined,
   };
 }
 
@@ -160,6 +180,7 @@ export const TenantRuntimeConfigCodec = {
     if (message.hookBreakerFailureThreshold !== undefined) writer.uint32(80).int32(message.hookBreakerFailureThreshold);
     if (message.hookBreakerOpenMs !== undefined) writer.uint32(88).int32(message.hookBreakerOpenMs);
     if (message.hookSignRequired !== undefined) writer.uint32(96).bool(message.hookSignRequired);
+    if (message.offlineUseHookPull !== undefined) writer.uint32(104).bool(message.offlineUseHookPull);
     return writer;
   },
   decode(input: _m0.Reader | Uint8Array, length?: number): TenantRuntimeConfig {
@@ -204,6 +225,9 @@ export const TenantRuntimeConfigCodec = {
           break;
         case 12:
           message.hookSignRequired = reader.bool();
+          break;
+        case 13:
+          message.offlineUseHookPull = reader.bool();
           break;
         default:
           reader.skipType(tag & 7);
@@ -420,6 +444,98 @@ export const GetGroupMembersResponseCodec = {
           break;
         case 2:
           message.userIds.push(reader.string());
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+};
+
+function createBaseGetOfflineMessagesRequest(): GetOfflineMessagesRequest {
+  return { meta: undefined, userId: "", deviceId: "", maxMessages: 0, cursor: "" };
+}
+
+export const GetOfflineMessagesRequestCodec = {
+  encode(message: GetOfflineMessagesRequest, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.meta !== undefined) HookMetaCodec.encode(message.meta, writer.uint32(10).fork()).ldelim();
+    if (message.userId !== "") writer.uint32(18).string(message.userId);
+    if (message.deviceId !== "") writer.uint32(26).string(message.deviceId);
+    if (message.maxMessages !== 0) writer.uint32(32).int32(message.maxMessages);
+    if (message.cursor !== "") writer.uint32(42).string(message.cursor);
+    return writer;
+  },
+  decode(input: _m0.Reader | Uint8Array, length?: number): GetOfflineMessagesRequest {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetOfflineMessagesRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          message.meta = HookMetaCodec.decode(reader, reader.uint32());
+          break;
+        case 2:
+          message.userId = reader.string();
+          break;
+        case 3:
+          message.deviceId = reader.string();
+          break;
+        case 4:
+          message.maxMessages = reader.int32();
+          break;
+        case 5:
+          message.cursor = reader.string();
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+};
+
+function createBaseGetOfflineMessagesResponse(): GetOfflineMessagesResponse {
+  return { meta: undefined, ok: false, messages: [], reason: "", nextCursor: "", hasMore: false };
+}
+
+export const GetOfflineMessagesResponseCodec = {
+  encode(message: GetOfflineMessagesResponse, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.meta !== undefined) HookMetaCodec.encode(message.meta, writer.uint32(10).fork()).ldelim();
+    if (message.ok === true) writer.uint32(16).bool(message.ok);
+    for (const v of message.messages) MessageRequestCodec.encode(v!, writer.uint32(26).fork()).ldelim();
+    if (message.reason !== "") writer.uint32(34).string(message.reason);
+    if (message.nextCursor !== "") writer.uint32(42).string(message.nextCursor);
+    if (message.hasMore === true) writer.uint32(48).bool(message.hasMore);
+    return writer;
+  },
+  decode(input: _m0.Reader | Uint8Array, length?: number): GetOfflineMessagesResponse {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetOfflineMessagesResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          message.meta = HookMetaCodec.decode(reader, reader.uint32());
+          break;
+        case 2:
+          message.ok = reader.bool();
+          break;
+        case 3:
+          message.messages.push(MessageRequestCodec.decode(reader, reader.uint32()));
+          break;
+        case 4:
+          message.reason = reader.string();
+          break;
+        case 5:
+          message.nextCursor = reader.string();
+          break;
+        case 6:
+          message.hasMore = reader.bool();
           break;
         default:
           reader.skipType(tag & 7);

@@ -534,6 +534,17 @@ internal sealed class WsGatewayHandler
                     continue;
                 }
 
+                if (session.TenantConfig.OfflineUseHookPull)
+                {
+                    var evt = MqEventFactory.CreateOfflineMessage(msg, _nodeId, session.TraceId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), session.TenantConfig.TenantSecret);
+                    if (_mq.TryEnqueue(evt))
+                    {
+                        _metrics.CounterInc("mics_offline_notified_total", 1, ("tenant", session.TenantId));
+                        deliveredAny = true;
+                        continue;
+                    }
+                }
+
                 var buffered = await BufferOfflineFrameBytesAsync(session, msg.ToUserId, frameBytes, ttl, cancellationToken);
                 if (buffered)
                 {
@@ -834,6 +845,16 @@ internal sealed class WsGatewayHandler
 
     private async Task BufferOfflineAsync(ConnectionSession session, string toUserId, MessageRequest msg, CancellationToken cancellationToken)
     {
+        if (session.TenantConfig.OfflineUseHookPull)
+        {
+            var evt = MqEventFactory.CreateOfflineMessage(msg, _nodeId, session.TraceId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), session.TenantConfig.TenantSecret);
+            if (_mq.TryEnqueue(evt))
+            {
+                _metrics.CounterInc("mics_offline_notified_total", 1, ("tenant", session.TenantId));
+                return;
+            }
+        }
+
         var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteArray();
         var ttl = TimeSpan.FromSeconds(session.TenantConfig.OfflineBufferTtlSeconds > 0 ? session.TenantConfig.OfflineBufferTtlSeconds : 300);
         _ = await BufferOfflineFrameBytesAsync(session, toUserId, frameBytes, ttl, cancellationToken);
@@ -894,6 +915,11 @@ internal sealed class WsGatewayHandler
 
     private async Task DrainOfflineAsync(ConnectionSession session, CancellationToken cancellationToken)
     {
+        if (session.TenantConfig.OfflineUseHookPull)
+        {
+            await DrainOfflineFromHookAsync(session, cancellationToken);
+        }
+
         var homeNodeId = RendezvousHash.PickNodeId(session.TenantId, session.UserId, _nodes.Current) ?? _nodeId;
         IReadOnlyList<byte[]> frames;
 
@@ -939,6 +965,97 @@ internal sealed class WsGatewayHandler
         if (frames.Count > 0)
         {
             _metrics.CounterInc("mics_offline_drained_total", frames.Count, ("tenant", session.TenantId), ("node", _nodeId));
+        }
+    }
+
+    private async Task DrainOfflineFromHookAsync(ConnectionSession session, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var cursor = "";
+            var drained = 0;
+            const int maxMessages = 100;
+            const int maxPages = 10;
+            const int maxTotal = 1000;
+
+            for (var page = 0; page < maxPages && drained < maxTotal; page++)
+            {
+                var result = await _hook.GetOfflineMessagesAsync(
+                    session.TenantConfig,
+                    session.TenantId,
+                    session.UserId,
+                    session.DeviceId,
+                    maxMessages,
+                    cursor,
+                    cancellationToken);
+
+                _metrics.CounterInc(
+                    "mics_hook_get_offline_messages_total",
+                    1,
+                    ("tenant", session.TenantId),
+                    ("result", result.Degraded ? "degraded" : result.Ok ? "ok" : "fail"));
+
+                if (!result.Ok)
+                {
+                    if (!result.Degraded)
+                    {
+                        _metrics.CounterInc("mics_offline_drain_failed_total", 1, ("tenant", session.TenantId), ("reason", "hook_fail"));
+                    }
+                    return;
+                }
+
+                if (result.Messages.Count == 0)
+                {
+                    return;
+                }
+
+                foreach (var msg in result.Messages)
+                {
+                    if (session.Socket.State != WebSocketState.Open)
+                    {
+                        return;
+                    }
+
+                    await SendFrameAsync(
+                        session.Socket,
+                        new ServerFrame { Delivery = new MessageDelivery { Message = msg } },
+                        cancellationToken);
+
+                    drained++;
+                    if (drained >= maxTotal)
+                    {
+                        _logger.LogWarning("offline_drain_hook_limit_reached user={UserId} count={Count}", session.UserId, drained);
+                        break;
+                    }
+                }
+
+                if (!result.HasMore)
+                {
+                    break;
+                }
+
+                if (string.IsNullOrWhiteSpace(result.NextCursor))
+                {
+                    _logger.LogWarning("offline_drain_hook_missing_cursor user={UserId}", session.UserId);
+                    break;
+                }
+
+                cursor = result.NextCursor;
+            }
+
+            if (drained > 0)
+            {
+                _metrics.CounterInc("mics_offline_drained_from_hook_total", drained, ("tenant", session.TenantId), ("node", _nodeId));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _metrics.CounterInc("mics_offline_drain_failed_total", 1, ("tenant", session.TenantId), ("reason", "exception"));
+            _logger.LogWarning(ex, "offline_drain_hook_failed user={UserId}", session.UserId);
         }
     }
 

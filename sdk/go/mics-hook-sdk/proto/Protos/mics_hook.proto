@@ -25,8 +25,10 @@ message TenantRuntimeConfig {
   optional int32 hook_breaker_failure_threshold = 10;
   optional int32 hook_breaker_open_ms = 11;
   optional bool hook_sign_required = 12;
+  // Enables best-effort offline message pull on connect via /get-offline-messages.
+  optional bool offline_use_hook_pull = 13;
 
-  // Base URL for subsequent HTTP hooks (check-message / get-group-members).
+  // Base URL for subsequent HTTP hooks (check-message / get-group-members / get-offline-messages).
   string hook_base_url = 1;
   // Heartbeat timeout (seconds).
   int32 heartbeat_timeout_seconds = 2;
@@ -81,6 +83,27 @@ message GetGroupMembersResponse {
   repeated string user_ids = 2;
 }
 
+// 6.3.1 Sync HTTP Hook: /get-offline-messages
+message GetOfflineMessagesRequest {
+  HookMeta meta = 1;
+  string user_id = 2;
+  // Optional: when provided, business can implement per-device offline semantics.
+  string device_id = 3;
+  // Max number of messages to return (suggested: 100).
+  int32 max_messages = 4;
+  // Pagination cursor (empty for first page).
+  string cursor = 5;
+}
+
+message GetOfflineMessagesResponse {
+  HookMeta meta = 1;
+  bool ok = 2;
+  repeated mics.message.v1.MessageRequest messages = 3;
+  string reason = 4;
+  string next_cursor = 5;
+  bool has_more = 6;
+}
+
 // 6.3.2 Async MQ Hook: per-tenant Topic `im-mics-{TenantId}-event`
 //
 // `sign` is optional but recommended for tamper protection.
@@ -107,4 +130,5 @@ enum EventType {
   CONNECT_OFFLINE = 1;
   SINGLE_CHAT_MSG = 2;
   GROUP_CHAT_MSG = 3;
+  OFFLINE_MESSAGE = 4;
 }

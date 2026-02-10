@@ -79,4 +79,41 @@ public sealed class MqEventFactoryTests
         var parsed = MessageRequest.Parser.ParseFrom(evt.EventData);
         Assert.Equal(msg, parsed);
     }
+
+    [Fact]
+    public void CreateOfflineMessage_SerializesOriginalMessage_AndSetsOfflineEventType()
+    {
+        var msg = new MessageRequest
+        {
+            TenantId = "t1",
+            UserId = "u1",
+            DeviceId = "d1",
+            MsgId = "m1",
+            MsgType = MessageType.SingleChat,
+            ToUserId = "u2",
+            GroupId = "",
+            MsgBody = ByteString.CopyFrom(new byte[] { 1, 2, 3 }),
+            TimestampMs = 999,
+        };
+
+        var evt = MqEventFactory.CreateOfflineMessage(msg, nodeId: "n1", traceId: "tr1", unixTimestamp: 123, tenantSecret: "secret");
+        Assert.Equal(EventType.OfflineMessage, evt.EventType);
+        Assert.Equal("m1", evt.MsgId);
+        Assert.Equal("t1", evt.TenantId);
+        Assert.Equal("u1", evt.UserId);
+        Assert.Equal("d1", evt.DeviceId);
+        Assert.Equal("u2", evt.ToUserId);
+        Assert.Equal("", evt.GroupId);
+        Assert.Equal("n1", evt.NodeId);
+        Assert.Equal("tr1", evt.TraceId);
+        Assert.Equal(123, evt.Timestamp);
+        Assert.False(string.IsNullOrWhiteSpace(evt.Sign));
+
+        var payload = evt.Clone();
+        payload.Sign = "";
+        Assert.Equal(HmacSign.ComputeBase64("secret", payload), evt.Sign);
+
+        var parsed = MessageRequest.Parser.ParseFrom(evt.EventData);
+        Assert.Equal(msg, parsed);
+    }
 }

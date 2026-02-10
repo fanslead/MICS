@@ -90,5 +90,39 @@ public sealed class HookSdkMappingTests
         Assert.False(parsed.Allow);
         Assert.Contains("sign", parsed.Reason, StringComparison.OrdinalIgnoreCase);
     }
-}
 
+    [Fact]
+    public async Task MapMicsGetOfflineMessages_MissingSign_WhenRequired_ReturnsOkFalse()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        var app = builder.Build();
+
+        app.MapMicsGetOfflineMessages(
+            handler: (_, _) => new ValueTask<GetOfflineMessagesResponse>(new GetOfflineMessagesResponse { Ok = true }),
+            options: new MicsHookMapOptions(_ => "secret", RequireSign: true));
+
+        await app.StartAsync();
+        var client = app.GetTestClient();
+
+        var req = new GetOfflineMessagesRequest
+        {
+            Meta = new HookMeta { TenantId = "t1", RequestId = "r1", TimestampMs = 1, Sign = "" },
+            UserId = "u1",
+            DeviceId = "d1",
+            MaxMessages = 100,
+            Cursor = "",
+        };
+
+        using var content = new ByteArrayContent(req.ToByteArray());
+        content.Headers.ContentType = new MediaTypeHeaderValue(HookProtobufHttp.ProtobufContentType);
+
+        var resp = await client.PostAsync("/get-offline-messages", content);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var bytes = await resp.Content.ReadAsByteArrayAsync();
+        var parsed = GetOfflineMessagesResponse.Parser.ParseFrom(bytes);
+        Assert.False(parsed.Ok);
+        Assert.Contains("sign", parsed.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+}

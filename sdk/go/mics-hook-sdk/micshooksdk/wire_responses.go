@@ -11,7 +11,7 @@ import "google.golang.org/protobuf/encoding/protowire"
 // 5 user_max_connections (int32)
 // 6 tenant_max_message_qps (int32)
 // 7 tenant_secret (string)
-// 8..12 optional overrides
+// 8..13 optional overrides
 func appendTenantRuntimeConfig(dst []byte, cfg TenantRuntimeConfig) []byte {
 	if cfg.HookBaseURL != "" {
 		dst = protowire.AppendTag(dst, 1, protowire.BytesType)
@@ -61,6 +61,14 @@ func appendTenantRuntimeConfig(dst []byte, cfg TenantRuntimeConfig) []byte {
 	if cfg.HookSignRequired != nil {
 		dst = protowire.AppendTag(dst, 12, protowire.VarintType)
 		if *cfg.HookSignRequired {
+			dst = protowire.AppendVarint(dst, 1)
+		} else {
+			dst = protowire.AppendVarint(dst, 0)
+		}
+	}
+	if cfg.OfflineUseHookPull != nil {
+		dst = protowire.AppendTag(dst, 13, protowire.VarintType)
+		if *cfg.OfflineUseHookPull {
 			dst = protowire.AppendVarint(dst, 1)
 		} else {
 			dst = protowire.AppendVarint(dst, 0)
@@ -126,3 +134,33 @@ func EncodeGetGroupMembersResponse(resp GetGroupMembersResponse) []byte {
 	return out
 }
 
+// ---- GetOfflineMessagesResponse (meta=1, ok=2, messages=3 repeated MessageRequest, reason=4, next_cursor=5, has_more=6) ----
+func EncodeGetOfflineMessagesResponse(resp GetOfflineMessagesResponse) []byte {
+	var out []byte
+	out = protowire.AppendTag(out, 1, protowire.BytesType)
+	out = protowire.AppendBytes(out, appendHookMeta(nil, resp.Meta))
+	if resp.Ok {
+		out = protowire.AppendTag(out, 2, protowire.VarintType)
+		out = protowire.AppendVarint(out, 1)
+	}
+	for _, msgBytes := range resp.MessagesWireBytes {
+		if len(msgBytes) == 0 {
+			continue
+		}
+		out = protowire.AppendTag(out, 3, protowire.BytesType)
+		out = protowire.AppendBytes(out, msgBytes)
+	}
+	if resp.Reason != "" {
+		out = protowire.AppendTag(out, 4, protowire.BytesType)
+		out = protowire.AppendString(out, resp.Reason)
+	}
+	if resp.NextCursor != "" {
+		out = protowire.AppendTag(out, 5, protowire.BytesType)
+		out = protowire.AppendString(out, resp.NextCursor)
+	}
+	if resp.HasMore {
+		out = protowire.AppendTag(out, 6, protowire.VarintType)
+		out = protowire.AppendVarint(out, 1)
+	}
+	return out
+}

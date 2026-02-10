@@ -5,12 +5,16 @@ import {
   AuthResponseCodec,
   CheckMessageRequestCodec,
   CheckMessageResponseCodec,
+  GetOfflineMessagesRequestCodec,
+  GetOfflineMessagesResponseCodec,
   GetGroupMembersRequestCodec,
   GetGroupMembersResponseCodec,
   type AuthRequest,
   type AuthResponse,
   type CheckMessageRequest,
   type CheckMessageResponse,
+  type GetOfflineMessagesRequest,
+  type GetOfflineMessagesResponse,
   type GetGroupMembersRequest,
   type GetGroupMembersResponse,
   type HookMeta,
@@ -22,6 +26,7 @@ export type MicsHookHandlers = Partial<{
   auth: (req: AuthRequest) => Promise<AuthResponse> | AuthResponse;
   checkMessage: (req: CheckMessageRequest) => Promise<CheckMessageResponse> | CheckMessageResponse;
   getGroupMembers: (req: GetGroupMembersRequest) => Promise<GetGroupMembersResponse> | GetGroupMembersResponse;
+  getOfflineMessages: (req: GetOfflineMessagesRequest) => Promise<GetOfflineMessagesResponse> | GetOfflineMessagesResponse;
 }>;
 
 export interface CreateMicsHookServerOptions {
@@ -108,6 +113,50 @@ export function createMicsHookServer(options: CreateMicsHookServerOptions) {
       const resp = h ? await h(request) : { meta: echoMeta(request.meta), userIds: [] };
       if (!resp.meta) resp.meta = echoMeta(request.meta);
       writeProtobuf(res, GetGroupMembersResponseCodec.encode(resp).finish());
+      return;
+    }
+
+    if (url === "/get-offline-messages") {
+      const request = GetOfflineMessagesRequestCodec.decode(body);
+      const tenantId = request.meta?.tenantId ?? "";
+      const { ok, secretOrReason } = resolveSecret(tenantSecretProvider, tenantId);
+      if (!ok) {
+        writeProtobuf(
+          res,
+          GetOfflineMessagesResponseCodec.encode({
+            meta: echoMeta(request.meta),
+            ok: false,
+            messages: [],
+            reason: secretOrReason,
+            nextCursor: "",
+            hasMore: false,
+          }).finish(),
+        );
+        return;
+      }
+
+      const verifyRes = verifyOrReason(requireSign, secretOrReason, request.meta, GetOfflineMessagesRequestCodec.encode({ ...request, meta: clearSign(request.meta) }).finish());
+      if (verifyRes !== "") {
+        writeProtobuf(
+          res,
+          GetOfflineMessagesResponseCodec.encode({
+            meta: echoMeta(request.meta),
+            ok: false,
+            messages: [],
+            reason: verifyRes,
+            nextCursor: "",
+            hasMore: false,
+          }).finish(),
+        );
+        return;
+      }
+
+      const h = handlers.getOfflineMessages;
+      const resp = h
+        ? await h(request)
+        : { meta: echoMeta(request.meta), ok: true, messages: [], reason: "", nextCursor: "", hasMore: false };
+      if (!resp.meta) resp.meta = echoMeta(request.meta);
+      writeProtobuf(res, GetOfflineMessagesResponseCodec.encode(resp).finish());
       return;
     }
 

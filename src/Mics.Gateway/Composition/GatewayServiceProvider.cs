@@ -173,6 +173,7 @@ internal partial class GatewayServiceProvider
             timeProvider,
             new MqEventDispatcherOptions(
                 QueueCapacity: Options.KafkaQueueCapacity,
+                MaxPendingPerTenant: Options.KafkaMaxPendingPerTenant,
                 MaxAttempts: Options.KafkaMaxAttempts,
                 RetryBackoffBase: TimeSpan.FromMilliseconds(Options.KafkaRetryBackoffMs),
                 IdleDelay: TimeSpan.FromMilliseconds(Options.KafkaIdleDelayMs)));

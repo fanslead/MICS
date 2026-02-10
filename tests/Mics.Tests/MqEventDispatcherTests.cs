@@ -47,6 +47,7 @@ public sealed class MqEventDispatcherTests
             TimeProvider.System,
             new MqEventDispatcherOptions(
                 QueueCapacity: 16,
+                MaxPendingPerTenant: 16,
                 MaxAttempts: 3,
                 RetryBackoffBase: TimeSpan.Zero,
                 IdleDelay: TimeSpan.FromMilliseconds(1)));
@@ -87,6 +88,7 @@ public sealed class MqEventDispatcherTests
             TimeProvider.System,
             new MqEventDispatcherOptions(
                 QueueCapacity: 16,
+                MaxPendingPerTenant: 16,
                 MaxAttempts: 2,
                 RetryBackoffBase: TimeSpan.Zero,
                 IdleDelay: TimeSpan.FromMilliseconds(1)));

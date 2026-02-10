@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Text;
+using System.Threading;
 using System.Threading.Channels;
 using Google.Protobuf;
 using Mics.Contracts.Hook.V1;
@@ -8,11 +10,17 @@ namespace Mics.Gateway.Mq;
 
 internal sealed class MqEventDispatcher
 {
+    private sealed class TenantPending
+    {
+        public int Pending;
+    }
+
     private readonly IMqProducer _producer;
     private readonly MetricsRegistry _metrics;
     private readonly TimeProvider _timeProvider;
     private readonly MqEventDispatcherOptions _options;
     private readonly Channel<MqEvent> _channel;
+    private readonly ConcurrentDictionary<string, TenantPending> _tenantPending = new(StringComparer.Ordinal);
 
     public MqEventDispatcher(
         IMqProducer producer,
@@ -37,10 +45,22 @@ internal sealed class MqEventDispatcher
 
     public bool TryEnqueue(MqEvent evt)
     {
+        var tenantId = evt.TenantId ?? "";
+        var maxPending = _options.MaxPendingPerTenant > 0 ? _options.MaxPendingPerTenant : _options.QueueCapacity;
+        var pending = _tenantPending.GetOrAdd(tenantId, _ => new TenantPending());
+
+        if (Interlocked.Increment(ref pending.Pending) > maxPending)
+        {
+            Interlocked.Decrement(ref pending.Pending);
+            _metrics.CounterInc("mics_mq_dropped_total", 1, ("tenant", tenantId), ("reason", "tenant_quota"));
+            return false;
+        }
+
         var ok = _channel.Writer.TryWrite(evt);
         if (!ok)
         {
-            _metrics.CounterInc("mics_mq_dropped_total", 1, ("tenant", evt.TenantId), ("reason", "queue_full"));
+            Interlocked.Decrement(ref pending.Pending);
+            _metrics.CounterInc("mics_mq_dropped_total", 1, ("tenant", tenantId), ("reason", "queue_full"));
         }
 
         return ok;
@@ -52,8 +72,30 @@ internal sealed class MqEventDispatcher
         {
             while (_channel.Reader.TryRead(out var evt))
             {
-                await PublishWithRetryAsync(evt, cancellationToken);
+                try
+                {
+                    await PublishWithRetryAsync(evt, cancellationToken);
+                }
+                finally
+                {
+                    ReleasePending(evt.TenantId ?? "");
+                }
             }
+        }
+    }
+
+    private void ReleasePending(string tenantId)
+    {
+        if (!_tenantPending.TryGetValue(tenantId, out var pending))
+        {
+            return;
+        }
+
+        var value = Interlocked.Decrement(ref pending.Pending);
+        if (value <= 0)
+        {
+            // Best-effort cleanup; avoid unbounded dictionary growth for inactive tenants.
+            _tenantPending.TryRemove(new KeyValuePair<string, TenantPending>(tenantId, pending));
         }
     }
 

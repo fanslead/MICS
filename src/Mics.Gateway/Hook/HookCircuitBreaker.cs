@@ -7,6 +7,7 @@ internal enum HookOperation
     Auth = 0,
     CheckMessage = 1,
     GetGroupMembers = 2,
+    GetOfflineMessages = 3,
 }
 
 internal sealed class HookCircuitBreaker

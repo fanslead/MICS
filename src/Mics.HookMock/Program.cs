@@ -92,6 +92,11 @@ app.MapPost("/auth", async (HttpContext ctx) =>
         }
     };
 
+    if (builder.Configuration.GetValue("OFFLINE_USE_HOOK_PULL", false))
+    {
+        okResponse.Config.OfflineUseHookPull = true;
+    }
+
     ApplyHookPolicyOverrides(okResponse.Config, policyOverride, builder.Configuration);
     await WriteProtobufAsync(okResponse, ctx.Response);
 });
@@ -188,6 +193,61 @@ app.MapPost("/get-group-members", async (HttpContext ctx) =>
         Meta = EchoMeta(request.Meta),
     };
     ok.UserIds.AddRange(userIds);
+
+    await WriteProtobufAsync(ok, ctx.Response);
+});
+
+app.MapPost("/get-offline-messages", async (HttpContext ctx) =>
+{
+    var request = await ReadProtobufAsync(GetOfflineMessagesRequest.Parser, ctx.Request);
+    var tenantId = request.Meta?.TenantId ?? string.Empty;
+    var signRequired = ResolveHookSignRequired(tenantId, tenantPolicies, builder.Configuration);
+
+    if (!TryGetTenantSecret(secrets, tenantId, out var tenantSecret))
+    {
+        var response = new GetOfflineMessagesResponse
+        {
+            Meta = EchoMeta(request.Meta),
+            Ok = false,
+            Reason = "unknown tenant"
+        };
+        await WriteProtobufAsync(response, ctx.Response);
+        return;
+    }
+
+    if (signRequired && (request.Meta is null || string.IsNullOrWhiteSpace(request.Meta.Sign)))
+    {
+        var response = new GetOfflineMessagesResponse
+        {
+            Meta = EchoMeta(request.Meta),
+            Ok = false,
+            Reason = "invalid sign"
+        };
+        await WriteProtobufAsync(response, ctx.Response);
+        return;
+    }
+
+    if (!ValidateSignIfPresent(tenantSecret, request.Meta, GetOfflineMessagesPayloadForSign(request)))
+    {
+        var response = new GetOfflineMessagesResponse
+        {
+            Meta = EchoMeta(request.Meta),
+            Ok = false,
+            Reason = "invalid sign"
+        };
+        await WriteProtobufAsync(response, ctx.Response);
+        return;
+    }
+
+    // HookMock intentionally does not store business data. Return empty for integration tests.
+    var ok = new GetOfflineMessagesResponse
+    {
+        Meta = EchoMeta(request.Meta),
+        Ok = true,
+        Reason = "",
+        NextCursor = "",
+        HasMore = false
+    };
 
     await WriteProtobufAsync(ok, ctx.Response);
 });
@@ -402,6 +462,16 @@ static CheckMessageRequest CheckMessagePayloadForSign(CheckMessageRequest reques
 }
 
 static GetGroupMembersRequest GroupMembersPayloadForSign(GetGroupMembersRequest request)
+{
+    var clone = request.Clone();
+    if (clone.Meta is not null)
+    {
+        clone.Meta.Sign = "";
+    }
+    return clone;
+}
+
+static GetOfflineMessagesRequest GetOfflineMessagesPayloadForSign(GetOfflineMessagesRequest request)
 {
     var clone = request.Clone();
     if (clone.Meta is not null)

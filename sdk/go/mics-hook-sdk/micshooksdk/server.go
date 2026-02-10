@@ -16,6 +16,7 @@ type HookServerOptions struct {
 	Auth            func(ctx context.Context, req AuthRequest) (AuthResponse, error)
 	CheckMessage    func(ctx context.Context, req CheckMessageRequest) (CheckMessageResponse, error)
 	GetGroupMembers func(ctx context.Context, req GetGroupMembersRequest) (GetGroupMembersResponse, error)
+	GetOfflineMessages func(ctx context.Context, req GetOfflineMessagesRequest) (GetOfflineMessagesResponse, error)
 }
 
 func NewHookServer(options HookServerOptions) http.Handler {
@@ -43,6 +44,8 @@ func NewHookServer(options HookServerOptions) http.Handler {
 			handleCheckMessage(w, r, body, options)
 		case "/get-group-members":
 			handleGetGroupMembers(w, r, body, options)
+		case "/get-offline-messages":
+			handleGetOfflineMessages(w, r, body, options)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -196,6 +199,66 @@ func handleGetGroupMembers(w http.ResponseWriter, r *http.Request, body []byte, 
 	writeProtobuf(w, EncodeGetGroupMembersResponse(resp))
 }
 
+func handleGetOfflineMessages(w http.ResponseWriter, r *http.Request, body []byte, options HookServerOptions) {
+	req, err := DecodeGetOfflineMessagesRequest(body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	secret, ok := options.TenantSecretLookup(req.Meta.TenantID)
+	if !ok || req.Meta.TenantID == "" {
+		writeProtobuf(w, EncodeGetOfflineMessagesResponse(GetOfflineMessagesResponse{
+			Meta:   echoMeta(req.Meta),
+			Ok:     false,
+			Reason: "unknown tenant",
+		}))
+		return
+	}
+
+	if !verifyHookOrReject(options.RequireSign, secret, req.Meta, EncodeGetOfflineMessagesRequest(GetOfflineMessagesRequest{
+		Meta:        clearSign(req.Meta),
+		UserID:      req.UserID,
+		DeviceID:    req.DeviceID,
+		MaxMessages: req.MaxMessages,
+		Cursor:      req.Cursor,
+	})) {
+		writeProtobuf(w, EncodeGetOfflineMessagesResponse(GetOfflineMessagesResponse{
+			Meta:   echoMeta(req.Meta),
+			Ok:     false,
+			Reason: "invalid sign",
+		}))
+		return
+	}
+
+	if options.GetOfflineMessages == nil {
+		writeProtobuf(w, EncodeGetOfflineMessagesResponse(GetOfflineMessagesResponse{
+			Meta:             echoMeta(req.Meta),
+			Ok:               true,
+			MessagesWireBytes: nil,
+			Reason:           "",
+			NextCursor:       "",
+			HasMore:          false,
+		}))
+		return
+	}
+
+	resp, err := options.GetOfflineMessages(r.Context(), req)
+	if err != nil {
+		writeProtobuf(w, EncodeGetOfflineMessagesResponse(GetOfflineMessagesResponse{
+			Meta:   echoMeta(req.Meta),
+			Ok:     false,
+			Reason: err.Error(),
+		}))
+		return
+	}
+	if resp.Meta.TenantID == "" {
+		resp.Meta = echoMeta(req.Meta)
+	}
+
+	writeProtobuf(w, EncodeGetOfflineMessagesResponse(resp))
+}
+
 func verifyHookOrReject(requireSign bool, tenantSecret string, meta HookMeta, payloadForSign []byte) bool {
 	if requireSign && meta.Sign == "" {
 		return false
@@ -221,4 +284,3 @@ func writeProtobuf(w http.ResponseWriter, payload []byte) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(payload)
 }
-

@@ -6,6 +6,8 @@ import com.mics.contracts.hook.v1.CheckMessageRequest;
 import com.mics.contracts.hook.v1.CheckMessageResponse;
 import com.mics.contracts.hook.v1.GetGroupMembersRequest;
 import com.mics.contracts.hook.v1.GetGroupMembersResponse;
+import com.mics.contracts.hook.v1.GetOfflineMessagesRequest;
+import com.mics.contracts.hook.v1.GetOfflineMessagesResponse;
 import com.mics.contracts.hook.v1.HookMeta;
 import com.mics.hooksdk.HookSigner;
 import com.sun.net.httpserver.HttpExchange;
@@ -29,6 +31,7 @@ public final class MicsHookHttpServer implements Closeable {
         this.server.createContext("/auth", new AuthHandler(handler, options));
         this.server.createContext("/check-message", new CheckMessageHandler(handler, options));
         this.server.createContext("/get-group-members", new GetGroupMembersHandler(handler, options));
+        this.server.createContext("/get-offline-messages", new GetOfflineMessagesHandler(handler, options));
     }
 
     public InetSocketAddress getAddress() {
@@ -230,6 +233,70 @@ public final class MicsHookHttpServer implements Closeable {
         }
     }
 
+    private static final class GetOfflineMessagesHandler implements HttpHandler {
+        private final MicsHookHandler handler;
+        private final MicsHookServerOptions options;
+
+        private GetOfflineMessagesHandler(MicsHookHandler handler, MicsHookServerOptions options) {
+            this.handler = handler;
+            this.options = options;
+        }
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                ProtobufHttp.writeText(exchange, 405, "Method Not Allowed");
+                return;
+            }
+
+            GetOfflineMessagesRequest req;
+            try {
+                req = GetOfflineMessagesRequest.parseFrom(ProtobufHttp.readBody(exchange));
+            } catch (Exception e) {
+                ProtobufHttp.writeText(exchange, 400, "Bad Request");
+                return;
+            }
+
+            HookMeta meta = req.hasMeta() ? req.getMeta() : HookMeta.getDefaultInstance();
+            String tenantId = meta.getTenantId();
+            String secretOrReason = resolveSecretOrReason(options, tenantId);
+            if (secretOrReason.startsWith("reason:")) {
+                ProtobufHttp.writeProtobuf(exchange, 200, GetOfflineMessagesResponse.newBuilder()
+                        .setMeta(echoMeta(meta))
+                        .setOk(false)
+                        .setReason(secretOrReason.substring("reason:".length()))
+                        .build());
+                return;
+            }
+
+            GetOfflineMessagesRequest payloadForSign = clearMetaSign(req);
+            boolean verified = HookSigner.verify(secretOrReason, meta, payloadForSign, options.isRequireSign());
+            if (!verified) {
+                ProtobufHttp.writeProtobuf(exchange, 200, GetOfflineMessagesResponse.newBuilder()
+                        .setMeta(echoMeta(meta))
+                        .setOk(false)
+                        .setReason("invalid sign")
+                        .build());
+                return;
+            }
+
+            try {
+                GetOfflineMessagesResponse resp = handler.onGetOfflineMessages(req);
+                GetOfflineMessagesResponse.Builder b = resp == null ? GetOfflineMessagesResponse.newBuilder().setOk(true) : resp.toBuilder();
+                if (!b.hasMeta()) {
+                    b.setMeta(echoMeta(meta));
+                }
+                ProtobufHttp.writeProtobuf(exchange, 200, b.build());
+            } catch (Exception e) {
+                ProtobufHttp.writeProtobuf(exchange, 200, GetOfflineMessagesResponse.newBuilder()
+                        .setMeta(echoMeta(meta))
+                        .setOk(false)
+                        .setReason("handler error")
+                        .build());
+            }
+        }
+    }
+
     private static String resolveSecretOrReason(MicsHookServerOptions options, String tenantId) {
         if (tenantId == null || tenantId.isBlank()) {
             return "reason:invalid tenant";
@@ -275,5 +342,12 @@ public final class MicsHookHttpServer implements Closeable {
         HookMeta cleared = request.getMeta().toBuilder().clearSign().build();
         return request.toBuilder().setMeta(cleared).build();
     }
-}
 
+    private static GetOfflineMessagesRequest clearMetaSign(GetOfflineMessagesRequest request) {
+        if (request == null || !request.hasMeta()) {
+            return request;
+        }
+        HookMeta cleared = request.getMeta().toBuilder().clearSign().build();
+        return request.toBuilder().setMeta(cleared).build();
+    }
+}

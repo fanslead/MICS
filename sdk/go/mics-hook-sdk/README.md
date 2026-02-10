@@ -6,6 +6,7 @@ This SDK is designed to keep business logic **outside** MICS, while making it ea
 - `/auth`
 - `/check-message`
 - `/get-group-members`
+- `/get-offline-messages`
 
 ## Status
 

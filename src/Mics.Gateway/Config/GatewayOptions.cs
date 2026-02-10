@@ -24,6 +24,7 @@ internal sealed class GatewayOptions
     public string KafkaBootstrapServers { get; init; } = "";
     public int KafkaMaxAttempts { get; init; } = 3;
     public int KafkaQueueCapacity { get; init; } = 50_000;
+    public int KafkaMaxPendingPerTenant { get; init; } = 10_000;
     public int KafkaRetryBackoffMs { get; init; } = 50;
     public int KafkaIdleDelayMs { get; init; } = 5;
 
@@ -60,6 +61,7 @@ internal sealed class GatewayOptions
         var kafka = config["KAFKA__BOOTSTRAP_SERVERS"] ?? config["Kafka:BootstrapServers"] ?? "";
         var kafkaMaxAttempts = Math.Clamp(config.GetValue("KAFKA_MAX_ATTEMPTS", 3), 1, 10);
         var kafkaQueueCapacity = Math.Clamp(config.GetValue("KAFKA_QUEUE_CAPACITY", 50_000), 1, 1_000_000);
+        var kafkaMaxPendingPerTenant = Math.Clamp(config.GetValue("KAFKA_MAX_PENDING_PER_TENANT", 10_000), 1, 1_000_000);
         var kafkaRetryBackoffMs = Math.Clamp(config.GetValue("KAFKA_RETRY_BACKOFF_MS", 50), 0, 10_000);
         var kafkaIdleDelayMs = Math.Clamp(config.GetValue("KAFKA_IDLE_DELAY_MS", 5), 0, 1_000);
 
@@ -89,6 +91,7 @@ internal sealed class GatewayOptions
             KafkaBootstrapServers = kafka,
             KafkaMaxAttempts = kafkaMaxAttempts,
             KafkaQueueCapacity = kafkaQueueCapacity,
+            KafkaMaxPendingPerTenant = kafkaMaxPendingPerTenant,
             KafkaRetryBackoffMs = kafkaRetryBackoffMs,
             KafkaIdleDelayMs = kafkaIdleDelayMs,
             TenantAuthMap = tenantAuthMap,

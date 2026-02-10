@@ -96,6 +96,29 @@ internal static class MqEventFactory
         return evt;
     }
 
+    public static MqEvent CreateOfflineMessage(MessageRequest message, string nodeId, string traceId, long unixTimestamp, string tenantSecret)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        var evt = new MqEvent
+        {
+            TenantId = message.TenantId ?? "",
+            EventType = EventType.OfflineMessage,
+            MsgId = message.MsgId ?? "",
+            UserId = message.UserId ?? "",
+            DeviceId = message.DeviceId ?? "",
+            ToUserId = message.ToUserId ?? "",
+            GroupId = message.GroupId ?? "",
+            EventData = ByteString.CopyFrom(message.ToByteArray()),
+            Timestamp = unixTimestamp,
+            NodeId = nodeId,
+            TraceId = traceId ?? "",
+        };
+
+        SignIfPossible(evt, tenantSecret);
+        return evt;
+    }
+
     private static void SignIfPossible(MqEvent evt, string tenantSecret)
     {
         if (string.IsNullOrWhiteSpace(tenantSecret))

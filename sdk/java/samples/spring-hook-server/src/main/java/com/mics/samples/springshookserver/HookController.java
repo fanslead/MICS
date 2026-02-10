@@ -7,6 +7,8 @@ import com.mics.contracts.hook.v1.CheckMessageRequest;
 import com.mics.contracts.hook.v1.CheckMessageResponse;
 import com.mics.contracts.hook.v1.GetGroupMembersRequest;
 import com.mics.contracts.hook.v1.GetGroupMembersResponse;
+import com.mics.contracts.hook.v1.GetOfflineMessagesRequest;
+import com.mics.contracts.hook.v1.GetOfflineMessagesResponse;
 import com.mics.contracts.hook.v1.HookMeta;
 import com.mics.contracts.hook.v1.TenantRuntimeConfig;
 import com.mics.contracts.message.v1.MessageRequest;
@@ -80,15 +82,19 @@ public class HookController {
         }
 
         String userId = token.substring("valid:".length());
-        TenantRuntimeConfig cfg = TenantRuntimeConfig.newBuilder()
+        boolean offlineUseHookPull = envBool("OFFLINE_USE_HOOK_PULL", false);
+        TenantRuntimeConfig.Builder cfgBuilder = TenantRuntimeConfig.newBuilder()
                 .setHookBaseUrl(publicUrl)
                 .setHeartbeatTimeoutSeconds(30)
                 .setOfflineBufferTtlSeconds(30)
                 .setTenantMaxConnections(100_000)
                 .setUserMaxConnections(3)
                 .setTenantMaxMessageQps(10_000)
-                .setTenantSecret(secretOrReason)
-                .build();
+                .setTenantSecret(secretOrReason);
+        if (offlineUseHookPull) {
+            cfgBuilder.setOfflineUseHookPull(true);
+        }
+        TenantRuntimeConfig cfg = cfgBuilder.build();
 
         return protobuf(AuthResponse.newBuilder()
                 .setMeta(echoMeta(meta))
@@ -153,6 +159,39 @@ public class HookController {
                 .build());
     }
 
+    @PostMapping(value = "/get-offline-messages", consumes = "application/protobuf", produces = "application/protobuf")
+    public ResponseEntity<byte[]> getOfflineMessages(@RequestBody byte[] body) throws Exception {
+        GetOfflineMessagesRequest req = GetOfflineMessagesRequest.parseFrom(body);
+        HookMeta meta = req.hasMeta() ? req.getMeta() : HookMeta.getDefaultInstance();
+
+        String secretOrReason = resolveSecretOrReason(meta.getTenantId());
+        if (secretOrReason.startsWith("reason:")) {
+            return protobuf(GetOfflineMessagesResponse.newBuilder()
+                    .setMeta(echoMeta(meta))
+                    .setOk(false)
+                    .setReason(secretOrReason.substring("reason:".length()))
+                    .build());
+        }
+
+        GetOfflineMessagesRequest payloadForSign = clearMetaSign(req);
+        if (!HookSigner.verify(secretOrReason, meta, payloadForSign, requireSign)) {
+            return protobuf(GetOfflineMessagesResponse.newBuilder()
+                    .setMeta(echoMeta(meta))
+                    .setOk(false)
+                    .setReason("invalid sign")
+                    .build());
+        }
+
+        // Sample server: return empty list (business should query its own storage).
+        return protobuf(GetOfflineMessagesResponse.newBuilder()
+                .setMeta(echoMeta(meta))
+                .setOk(true)
+                .setReason("")
+                .setNextCursor("")
+                .setHasMore(false)
+                .build());
+    }
+
     private ResponseEntity<byte[]> protobuf(com.google.protobuf.Message message) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.parseMediaType("application/protobuf"));
@@ -205,6 +244,14 @@ public class HookController {
         return request.toBuilder().setMeta(cleared).build();
     }
 
+    private static GetOfflineMessagesRequest clearMetaSign(GetOfflineMessagesRequest request) {
+        if (request == null || !request.hasMeta()) {
+            return request;
+        }
+        HookMeta cleared = request.getMeta().toBuilder().clearSign().build();
+        return request.toBuilder().setMeta(cleared).build();
+    }
+
     private static Map<String, String> parseTenantSecrets(String env) {
         if (env == null || env.isBlank()) {
             return new HashMap<>();
@@ -246,4 +293,3 @@ public class HookController {
         return "1".equals(s.trim()) || "true".equalsIgnoreCase(s.trim()) || "yes".equalsIgnoreCase(s.trim());
     }
 }
-

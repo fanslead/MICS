@@ -262,6 +262,90 @@ func EncodeGetGroupMembersRequest(req GetGroupMembersRequest) []byte {
 	return out
 }
 
+// ---- GetOfflineMessagesRequest (meta=1, user_id=2, device_id=3, max_messages=4, cursor=5) ----
+func DecodeGetOfflineMessagesRequest(b []byte) (GetOfflineMessagesRequest, error) {
+	var req GetOfflineMessagesRequest
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return GetOfflineMessagesRequest{}, errInvalidProtobuf
+		}
+		b = b[n:]
+
+		switch num {
+		case 1:
+			v, n := protowire.ConsumeBytes(b)
+			if n < 0 {
+				return GetOfflineMessagesRequest{}, errInvalidProtobuf
+			}
+			meta, err := decodeHookMeta(v)
+			if err != nil {
+				return GetOfflineMessagesRequest{}, err
+			}
+			req.Meta = meta
+			b = b[n:]
+		case 2:
+			v, n := protowire.ConsumeString(b)
+			if n < 0 {
+				return GetOfflineMessagesRequest{}, errInvalidProtobuf
+			}
+			req.UserID = v
+			b = b[n:]
+		case 3:
+			v, n := protowire.ConsumeString(b)
+			if n < 0 {
+				return GetOfflineMessagesRequest{}, errInvalidProtobuf
+			}
+			req.DeviceID = v
+			b = b[n:]
+		case 4:
+			v, n := protowire.ConsumeVarint(b)
+			if n < 0 {
+				return GetOfflineMessagesRequest{}, errInvalidProtobuf
+			}
+			req.MaxMessages = int32(v)
+			b = b[n:]
+		case 5:
+			v, n := protowire.ConsumeString(b)
+			if n < 0 {
+				return GetOfflineMessagesRequest{}, errInvalidProtobuf
+			}
+			req.Cursor = v
+			b = b[n:]
+		default:
+			n := protowire.ConsumeFieldValue(num, typ, b)
+			if n < 0 {
+				return GetOfflineMessagesRequest{}, errInvalidProtobuf
+			}
+			b = b[n:]
+		}
+	}
+	return req, nil
+}
+
+func EncodeGetOfflineMessagesRequest(req GetOfflineMessagesRequest) []byte {
+	var out []byte
+	out = protowire.AppendTag(out, 1, protowire.BytesType)
+	out = protowire.AppendBytes(out, appendHookMeta(nil, req.Meta))
+	if req.UserID != "" {
+		out = protowire.AppendTag(out, 2, protowire.BytesType)
+		out = protowire.AppendString(out, req.UserID)
+	}
+	if req.DeviceID != "" {
+		out = protowire.AppendTag(out, 3, protowire.BytesType)
+		out = protowire.AppendString(out, req.DeviceID)
+	}
+	if req.MaxMessages != 0 {
+		out = protowire.AppendTag(out, 4, protowire.VarintType)
+		out = protowire.AppendVarint(out, uint64(req.MaxMessages))
+	}
+	if req.Cursor != "" {
+		out = protowire.AppendTag(out, 5, protowire.BytesType)
+		out = protowire.AppendString(out, req.Cursor)
+	}
+	return out
+}
+
 func must(err error) {
 	if err != nil {
 		panic(err)
@@ -271,4 +355,3 @@ func must(err error) {
 func wrapDecodeErr(name string, err error) error {
 	return fmt.Errorf("%s: %w", name, err)
 }
-
