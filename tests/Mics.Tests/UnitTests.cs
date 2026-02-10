@@ -126,6 +126,33 @@ public sealed class GatewayOptionsTests
         Assert.Equal(10, options.GroupOfflineBufferMaxUsers);
         Assert.Equal(999, options.GroupMembersMaxUsers);
     }
+
+    [Fact]
+    public void Load_DedupMode_DefaultsToMemory_AndCanBeOverridden()
+    {
+        var cfg = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["REDIS__CONNECTION"] = "localhost:6379",
+            })
+            .Build();
+
+        var options = GatewayOptions.Load(cfg);
+        var prop = typeof(GatewayOptions).GetProperty("DedupMode");
+        Assert.NotNull(prop);
+        Assert.Equal("memory", (string)prop!.GetValue(options)!);
+
+        var cfg2 = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["REDIS__CONNECTION"] = "localhost:6379",
+                ["DEDUP_MODE"] = "redis",
+            })
+            .Build();
+
+        var options2 = GatewayOptions.Load(cfg2);
+        Assert.Equal("redis", (string)prop.GetValue(options2)!);
+    }
 }
 
 public sealed class MetricsRegistryTests

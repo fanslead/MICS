@@ -17,6 +17,10 @@ internal sealed class GatewayOptions
     public int GroupRouteChunkSize { get; init; } = 256;
     public int GroupOfflineBufferMaxUsers { get; init; } = 1024;
     public int GroupMembersMaxUsers { get; init; } = 200_000;
+
+    // Dedup state is short-lived and should be treated as best-effort.
+    // Supported: "memory" (default), "redis".
+    public string DedupMode { get; init; } = "memory";
     public string KafkaBootstrapServers { get; init; } = "";
     public int KafkaMaxAttempts { get; init; } = 3;
     public int KafkaQueueCapacity { get; init; } = 50_000;
@@ -48,6 +52,11 @@ internal sealed class GatewayOptions
         var groupChunk = Math.Clamp(config.GetValue("GROUP_ROUTE_CHUNK_SIZE", 256), 1, 4096);
         var groupOfflineMax = Math.Clamp(config.GetValue("GROUP_OFFLINE_BUFFER_MAX_USERS", 1024), 0, 1_000_000);
         var groupMembersMax = Math.Clamp(config.GetValue("GROUP_MEMBERS_MAX_USERS", 200_000), 1, 5_000_000);
+        var dedupMode = (config["DEDUP_MODE"] ?? "memory").Trim();
+        if (!string.Equals(dedupMode, "redis", StringComparison.OrdinalIgnoreCase))
+        {
+            dedupMode = "memory";
+        }
         var kafka = config["KAFKA__BOOTSTRAP_SERVERS"] ?? config["Kafka:BootstrapServers"] ?? "";
         var kafkaMaxAttempts = Math.Clamp(config.GetValue("KAFKA_MAX_ATTEMPTS", 3), 1, 10);
         var kafkaQueueCapacity = Math.Clamp(config.GetValue("KAFKA_QUEUE_CAPACITY", 50_000), 1, 1_000_000);
@@ -76,6 +85,7 @@ internal sealed class GatewayOptions
             GroupRouteChunkSize = groupChunk,
             GroupOfflineBufferMaxUsers = groupOfflineMax,
             GroupMembersMaxUsers = groupMembersMax,
+            DedupMode = dedupMode,
             KafkaBootstrapServers = kafka,
             KafkaMaxAttempts = kafkaMaxAttempts,
             KafkaQueueCapacity = kafkaQueueCapacity,

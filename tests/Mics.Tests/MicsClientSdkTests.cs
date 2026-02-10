@@ -73,8 +73,10 @@ public sealed class MicsClientSdkTests
         Assert.Equal("m1", ack.MsgId);
         Assert.Equal(AckStatus.Sent, ack.Status);
 
-        var sent = ws.Sends.Single(s => s.Type == WebSocketMessageType.Binary).Payload;
-        var clientFrame = ClientFrame.Parser.ParseFrom(sent);
+        var clientFrame = ws.Sends
+            .Where(s => s.Type == WebSocketMessageType.Binary)
+            .Select(s => ClientFrame.Parser.ParseFrom(s.Payload))
+            .Single(f => f.PayloadCase == ClientFrame.PayloadOneofCase.Message && f.Message.MsgId == "m1");
         Assert.Equal(ClientFrame.PayloadOneofCase.Message, clientFrame.PayloadCase);
         Assert.Equal("t1", clientFrame.Message.TenantId);
         Assert.Equal("u1", clientFrame.Message.UserId);
@@ -120,8 +122,10 @@ public sealed class MicsClientSdkTests
         }.ToByteArray(), endOfMessage: true);
         await sendTask;
 
-        var sent = ws.Sends.Single(s => s.Type == WebSocketMessageType.Binary).Payload;
-        var frame = ClientFrame.Parser.ParseFrom(sent);
+        var frame = ws.Sends
+            .Where(s => s.Type == WebSocketMessageType.Binary)
+            .Select(s => ClientFrame.Parser.ParseFrom(s.Payload))
+            .Single(f => f.PayloadCase == ClientFrame.PayloadOneofCase.Message && f.Message.MsgId == "m-enc");
         Assert.Equal("m-enc", frame.Message.MsgId);
         Assert.NotEmpty(frame.Message.MsgBody);
         Assert.NotEqual(ByteString.CopyFrom(plaintext), frame.Message.MsgBody);
@@ -224,8 +228,10 @@ public sealed class MicsClientSdkTests
         Assert.Equal("m2", ack.MsgId);
         Assert.Equal(AckStatus.Sent, ack.Status);
 
-        var sent = ws.Sends.Single(s => s.Type == WebSocketMessageType.Binary).Payload;
-        var clientFrame = ClientFrame.Parser.ParseFrom(sent);
+        var clientFrame = ws.Sends
+            .Where(s => s.Type == WebSocketMessageType.Binary)
+            .Select(s => ClientFrame.Parser.ParseFrom(s.Payload))
+            .Single(f => f.PayloadCase == ClientFrame.PayloadOneofCase.Message && f.Message.MsgId == "m2");
         Assert.Equal(ClientFrame.PayloadOneofCase.Message, clientFrame.PayloadCase);
         Assert.Equal(MessageType.GroupChat, clientFrame.Message.MsgType);
         Assert.Equal("group-1", clientFrame.Message.GroupId);

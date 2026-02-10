@@ -12,14 +12,44 @@ internal sealed class HookConcurrencyLimiter : IHookConcurrencyLimiter
 {
     private sealed class Entry
     {
-        public Entry(int maxConcurrency)
+        private int _reservedPermits;
+        private int _desiredMax;
+
+        public Entry(int baseMaxConcurrency)
         {
-            MaxConcurrency = maxConcurrency;
-            Semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+            BaseMaxConcurrency = baseMaxConcurrency;
+            _desiredMax = baseMaxConcurrency;
+            Semaphore = new SemaphoreSlim(baseMaxConcurrency, baseMaxConcurrency);
         }
 
-        public int MaxConcurrency { get; }
+        public int BaseMaxConcurrency { get; }
         public SemaphoreSlim Semaphore { get; }
+
+        public void AdjustMax(int desiredMaxConcurrency)
+        {
+            desiredMaxConcurrency = Math.Clamp(desiredMaxConcurrency, 1, BaseMaxConcurrency);
+            Volatile.Write(ref _desiredMax, desiredMaxConcurrency);
+
+            var reserveTarget = BaseMaxConcurrency - desiredMaxConcurrency;
+
+            // Increase reserved permits (reduce concurrency) by acquiring permits and holding them.
+            while (Volatile.Read(ref _reservedPermits) < reserveTarget)
+            {
+                if (!Semaphore.Wait(0))
+                {
+                    break;
+                }
+
+                Interlocked.Increment(ref _reservedPermits);
+            }
+
+            // Decrease reserved permits (increase concurrency) by releasing held permits.
+            while (Volatile.Read(ref _reservedPermits) > reserveTarget)
+            {
+                Semaphore.Release();
+                Interlocked.Decrement(ref _reservedPermits);
+            }
+        }
     }
 
     private sealed class Releaser : IAsyncDisposable
@@ -52,6 +82,7 @@ internal sealed class HookConcurrencyLimiter : IHookConcurrencyLimiter
         var max = Math.Max(1, policy.MaxConcurrency);
         var key = (tenantId, op);
         var entry = GetOrUpdateEntry(key, max);
+        entry.AdjustMax(max);
 
         var queueTimeout = policy.QueueTimeout < TimeSpan.Zero ? TimeSpan.Zero : policy.QueueTimeout;
         var ok = await entry.Semaphore.WaitAsync(queueTimeout, cancellationToken);
@@ -69,7 +100,7 @@ internal sealed class HookConcurrencyLimiter : IHookConcurrencyLimiter
         while (true)
         {
             var existing = _entries.GetOrAdd(key, _ => new Entry(maxConcurrency));
-            if (existing.MaxConcurrency == maxConcurrency)
+            if (existing.BaseMaxConcurrency >= maxConcurrency)
             {
                 return existing;
             }

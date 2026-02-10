@@ -216,13 +216,31 @@ internal sealed class WsGatewayHandler
 	        {
 	            var socket = session.Socket;
 
-	        while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
-	        {
-	            var binary = await WebSocketMessageIO.ReadBinaryAsync(socket, cancellationToken);
-	            if (binary is null)
-	            {
-	                return;
-	            }
+        while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+        {
+            var maxFrameBytes = _maxMessageBytes > 0
+                ? Math.Min(int.MaxValue, _maxMessageBytes + (64 * 1024))
+                : 0;
+
+            PooledProtobufBytes? binary;
+            try
+            {
+                binary = await WebSocketMessageIO.ReadBinaryAsync(socket, maxFrameBytes, cancellationToken);
+            }
+            catch (WebSocketMessageIO.WebSocketFrameTooLargeException)
+            {
+                _metrics.CounterInc("mics_ws_frames_rejected_total", 1, ("tenant", session.TenantId), ("reason", "frame_too_large"));
+                await SendFrameAsync(socket, new ServerFrame
+                {
+                    Error = new ServerError { Code = MicsProtocolCodes.ErrorFrameTooLarge, Message = "frame too large" }
+                }, cancellationToken);
+                continue;
+            }
+
+            if (binary is null)
+            {
+                return;
+            }
 
 	            ClientFrame frame;
 	            try
@@ -492,21 +510,43 @@ internal sealed class WsGatewayHandler
             return (true, "");
         }
 
+        var ttl = TimeSpan.FromSeconds(session.TenantConfig.OfflineBufferTtlSeconds > 0 ? session.TenantConfig.OfflineBufferTtlSeconds : 300);
+        var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteArray();
+
+        var deliveredAny = false;
+        var failed = 0;
+
         var byNode = routes.Values.GroupBy(r => r.NodeId, StringComparer.Ordinal);
         foreach (var group in byNode)
         {
             if (group.Key == _nodeId)
             {
-                await DeliverLocalAsync(session.TenantId, msg.ToUserId, msg, cancellationToken);
+                var delivered = await DeliverLocalAsync(session.TenantId, msg.ToUserId, msg, cancellationToken);
+                deliveredAny |= delivered > 0;
             }
             else
             {
                 var endpoint = group.First().Endpoint;
-                await ForwardSingleAsync(endpoint, session.TenantId, msg.ToUserId, msg, cancellationToken);
+                var forwarded = await ForwardSingleAsync(endpoint, session.TenantId, msg.ToUserId, msg, cancellationToken);
+                if (forwarded)
+                {
+                    deliveredAny = true;
+                    continue;
+                }
+
+                var buffered = await BufferOfflineFrameBytesAsync(session, msg.ToUserId, frameBytes, ttl, cancellationToken);
+                if (buffered)
+                {
+                    deliveredAny = true;
+                }
+                else
+                {
+                    failed++;
+                }
             }
         }
 
-        return (true, "");
+        return deliveredAny ? (true, "") : (false, failed > 0 ? "delivery failed" : "no routes delivered");
     }
 
     private async Task<(bool Ok, string Reason)> HandleGroupChatAsync(
@@ -546,6 +586,7 @@ internal sealed class WsGatewayHandler
         var nodeBuckets = new Dictionary<string, (string Endpoint, HashSet<string> Users)>(StringComparer.Ordinal);
         var offlineBuffered = 0;
         var offlineSkipped = 0;
+        var deliveredAny = false;
         var ttl = TimeSpan.FromSeconds(session.TenantConfig.OfflineBufferTtlSeconds > 0 ? session.TenantConfig.OfflineBufferTtlSeconds : 300);
         var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteArray();
 
@@ -583,6 +624,7 @@ internal sealed class WsGatewayHandler
                         if (await BufferOfflineFrameBytesAsync(session, memberUserId, frameBytes, ttl, cancellationToken))
                         {
                             offlineBuffered++;
+                            deliveredAny = true;
                         }
                         else
                         {
@@ -633,12 +675,38 @@ internal sealed class WsGatewayHandler
             {
                 foreach (var u in bucket.Users)
                 {
-                    await DeliverLocalAsync(session.TenantId, u, msg, cancellationToken);
+                    var delivered = await DeliverLocalAsync(session.TenantId, u, msg, cancellationToken);
+                    deliveredAny |= delivered > 0;
                 }
+
+                continue;
             }
-            else
+
+            var forwarded = await ForwardBatchAsync(bucket.Endpoint, session.TenantId, bucket.Users.ToArray(), msg, cancellationToken);
+            if (forwarded)
             {
-                await ForwardBatchAsync(bucket.Endpoint, session.TenantId, bucket.Users.ToArray(), msg, cancellationToken);
+                deliveredAny = true;
+                continue;
+            }
+
+            // Degrade: buffer offline for users of the failed node bucket (bounded).
+            foreach (var u in bucket.Users)
+            {
+                if (_groupOfflineBufferMaxUsers > 0 && offlineBuffered >= _groupOfflineBufferMaxUsers)
+                {
+                    offlineSkipped++;
+                    continue;
+                }
+
+                if (await BufferOfflineFrameBytesAsync(session, u, frameBytes, ttl, cancellationToken))
+                {
+                    offlineBuffered++;
+                    deliveredAny = true;
+                }
+                else
+                {
+                    offlineSkipped++;
+                }
             }
         }
 
@@ -653,7 +721,7 @@ internal sealed class WsGatewayHandler
             _metrics.CounterInc("mics_group_offline_buffer_skipped_total", offlineSkipped, ("tenant", session.TenantId));
         }
 
-        return (true, "");
+        return deliveredAny ? (true, "") : (false, "delivery failed");
     }
 
     private static string[] SliceMembers(IReadOnlyList<string> members, int offset, int chunkSize)
@@ -697,12 +765,12 @@ internal sealed class WsGatewayHandler
         return false;
     }
 
-	    private async Task DeliverLocalAsync(string tenantId, string toUserId, MessageRequest msg, CancellationToken cancellationToken)
+	    private async Task<int> DeliverLocalAsync(string tenantId, string toUserId, MessageRequest msg, CancellationToken cancellationToken)
 	    {
 	        var sessions = _connections.GetAllForUser(tenantId, toUserId);
 	        if (sessions.Count == 0)
 	        {
-	            return;
+	            return 0;
 	        }
 
 	        var frame = new ServerFrame { Delivery = new MessageDelivery { Message = msg } };
@@ -719,24 +787,31 @@ internal sealed class WsGatewayHandler
 	        }
 
         _metrics.CounterInc("mics_deliveries_total", sessions.Count, ("tenant", tenantId), ("via", "local"));
+        return sessions.Count;
     }
 
-    private async Task ForwardSingleAsync(string endpoint, string tenantId, string toUserId, MessageRequest msg, CancellationToken cancellationToken)
+    private async Task<bool> ForwardSingleAsync(string endpoint, string tenantId, string toUserId, MessageRequest msg, CancellationToken cancellationToken)
     {
         try
         {
             var client = _nodeClients.Get(endpoint);
-            await client.ForwardSingleAsync(new ForwardSingleRequest { TenantId = tenantId, ToUserId = toUserId, Message = msg }, cancellationToken: cancellationToken);
+            var headers = BuildClusterGrpcHeaders();
+            await client.ForwardSingleAsync(
+                new ForwardSingleRequest { TenantId = tenantId, ToUserId = toUserId, Message = msg },
+                headers: headers,
+                cancellationToken: cancellationToken);
             _metrics.CounterInc("mics_deliveries_total", 1, ("tenant", tenantId), ("via", "grpc_single"));
+            return true;
         }
         catch (RpcException ex)
         {
             _metrics.CounterInc("mics_grpc_forward_failed_total", 1, ("tenant", tenantId), ("via", "grpc_single"), ("status", ex.StatusCode.ToString()));
             _logger.LogWarning(ex, "grpc_forward_single_failed to={ToUserId} msg={MsgId} endpoint={Endpoint} status={Status}", toUserId, msg.MsgId, endpoint, ex.StatusCode);
+            return false;
         }
     }
 
-    private async Task ForwardBatchAsync(string endpoint, string tenantId, IReadOnlyList<string> toUserIds, MessageRequest msg, CancellationToken cancellationToken)
+    private async Task<bool> ForwardBatchAsync(string endpoint, string tenantId, IReadOnlyList<string> toUserIds, MessageRequest msg, CancellationToken cancellationToken)
     {
         try
         {
@@ -744,13 +819,16 @@ internal sealed class WsGatewayHandler
             req.ToUserIds.AddRange(toUserIds);
 
             var client = _nodeClients.Get(endpoint);
-            await client.ForwardBatchAsync(req, cancellationToken: cancellationToken);
+            var headers = BuildClusterGrpcHeaders();
+            await client.ForwardBatchAsync(req, headers: headers, cancellationToken: cancellationToken);
             _metrics.CounterInc("mics_deliveries_total", toUserIds.Count, ("tenant", tenantId), ("via", "grpc_batch"));
+            return true;
         }
         catch (RpcException ex)
         {
             _metrics.CounterInc("mics_grpc_forward_failed_total", toUserIds.Count, ("tenant", tenantId), ("via", "grpc_batch"), ("status", ex.StatusCode.ToString()));
             _logger.LogWarning(ex, "grpc_forward_batch_failed users={Users} msg={MsgId} endpoint={Endpoint} status={Status}", toUserIds.Count, msg.MsgId, endpoint, ex.StatusCode);
+            return false;
         }
     }
 
@@ -793,7 +871,7 @@ internal sealed class WsGatewayHandler
                 ToUserId = toUserId,
                 ServerFrame = ByteString.CopyFrom(frameBytes),
                 TtlSeconds = (int)Math.Clamp(ttl.TotalSeconds, 1, int.MaxValue),
-            }, cancellationToken: cancellationToken);
+            }, headers: BuildClusterGrpcHeaders(), cancellationToken: cancellationToken);
 
             if (resp.Ok)
             {
@@ -834,7 +912,10 @@ internal sealed class WsGatewayHandler
             try
             {
                 var client = _nodeClients.Get(home.Endpoint);
-                var resp = await client.DrainOfflineAsync(new DrainOfflineRequest { TenantId = session.TenantId, UserId = session.UserId }, cancellationToken: cancellationToken);
+                var resp = await client.DrainOfflineAsync(
+                    new DrainOfflineRequest { TenantId = session.TenantId, UserId = session.UserId },
+                    headers: BuildClusterGrpcHeaders(),
+                    cancellationToken: cancellationToken);
                 frames = resp.ServerFrames.Select(b => b.ToByteArray()).ToArray();
             }
             catch (RpcException ex)
@@ -882,5 +963,16 @@ internal sealed class WsGatewayHandler
         catch
         {
         }
+    }
+
+    private static Metadata? BuildClusterGrpcHeaders()
+    {
+        var token = Environment.GetEnvironmentVariable("CLUSTER_GRPC_TOKEN");
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return null;
+        }
+
+        return new Metadata { { "x-mics-node-token", token } };
     }
 }

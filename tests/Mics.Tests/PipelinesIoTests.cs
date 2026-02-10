@@ -74,8 +74,7 @@ public sealed class PipelinesIoTests
         var ioType = asm.GetType("Mics.Gateway.Ws.WebSocketMessageIO", throwOnError: false);
         Assert.NotNull(ioType);
 
-        var read = ioType!.GetMethod("ReadBinaryAsync");
-        Assert.NotNull(read);
+        var read = ioType!.GetMethods().Single(m => m.Name == "ReadBinaryAsync");
 
         var frame = new ClientFrame
         {
@@ -89,7 +88,11 @@ public sealed class PipelinesIoTests
         ws.EnqueueReceive(WebSocketMessageType.Binary, a, endOfMessage: false);
         ws.EnqueueReceive(WebSocketMessageType.Binary, b, endOfMessage: true);
 
-        dynamic vt = read!.Invoke(null, new object[] { ws, CancellationToken.None })!;
+        var args = read.GetParameters().Length == 3
+            ? new object[] { ws, 1024 * 1024, CancellationToken.None }
+            : new object[] { ws, CancellationToken.None };
+
+        dynamic vt = read.Invoke(null, args)!;
         object? pooled = await vt;
         Assert.NotNull(pooled);
 
@@ -100,6 +103,71 @@ public sealed class PipelinesIoTests
         var cis = new CodedInputStream(buffer, 0, length);
         var parsed = ClientFrame.Parser.ParseFrom(cis);
         Assert.Equal(frame, parsed);
+
+        ((IDisposable)pooled).Dispose();
+    }
+
+    [Fact]
+    public async Task WebSocketMessageIO_ReadBinaryAsync_LargeMessage_DoesNotDeadlock()
+    {
+        var asm = typeof(Mics.Gateway.Ws.WsGatewayHandler).Assembly;
+        var ioType = asm.GetType("Mics.Gateway.Ws.WebSocketMessageIO", throwOnError: false);
+        Assert.NotNull(ioType);
+
+        var read = ioType!.GetMethods().Single(m => m.Name == "ReadBinaryAsync");
+
+        var frame = new ClientFrame
+        {
+            Message = new MessageRequest
+            {
+                MsgId = "m1",
+                MsgType = MessageType.SingleChat,
+                ToUserId = "u2",
+                MsgBody = ByteString.CopyFrom(new byte[320_000]),
+                TimestampMs = 1,
+            }
+        };
+
+        var bytes = frame.ToByteArray();
+
+        using var ws = new ScriptedWebSocket();
+        const int chunk = 8 * 1024;
+        for (var i = 0; i < bytes.Length; i += chunk)
+        {
+            var len = Math.Min(chunk, bytes.Length - i);
+            var part = bytes.AsSpan(i, len).ToArray();
+            ws.EnqueueReceive(WebSocketMessageType.Binary, part, endOfMessage: i + len >= bytes.Length);
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+
+        object? pooled = null;
+        Exception? ex = null;
+
+        try
+        {
+            var args = read.GetParameters().Length == 3
+                ? new object[] { ws, bytes.Length + 1, cts.Token }
+                : new object[] { ws, cts.Token };
+
+            dynamic vt = read.Invoke(null, args)!;
+            pooled = await vt;
+        }
+        catch (Exception e)
+        {
+            ex = e;
+        }
+
+        Assert.Null(ex);
+        Assert.NotNull(pooled);
+
+        var pooledType = pooled!.GetType();
+        var buffer = (byte[])pooledType.GetProperty("Buffer")!.GetValue(pooled)!;
+        var length = (int)pooledType.GetProperty("Length")!.GetValue(pooled)!;
+
+        var cis = new CodedInputStream(buffer, 0, length);
+        var parsed = ClientFrame.Parser.ParseFrom(cis);
+        Assert.Equal(frame.Message.MsgId, parsed.Message.MsgId);
 
         ((IDisposable)pooled).Dispose();
     }

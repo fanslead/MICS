@@ -55,6 +55,13 @@ internal sealed class HookCircuitBreaker
         Interlocked.Exchange(ref state.HalfOpenInFlight, 0);
     }
 
+    public void EndAttempt(string tenantId, HookOperation op)
+    {
+        var state = _states.GetOrAdd((tenantId, op), _ => new State());
+        // Release the half-open in-flight gate even if the request never reached the hook (e.g., queue rejected).
+        Interlocked.Exchange(ref state.HalfOpenInFlight, 0);
+    }
+
     public void OnFailure(string tenantId, HookOperation op, HookBreakerPolicy policy)
     {
         var state = _states.GetOrAdd((tenantId, op), _ => new State());

@@ -85,6 +85,7 @@ if existed == 1 then
   redis.call('SADD', nodeRoutesKey, routeEntry)
   redis.call('ZADD', tenantLeasesKey, expiresAt, tenantMember)
   redis.call('ZADD', userLeasesKey, expiresAt, userMember)
+  redis.call('PEXPIRE', onlineKey, ttlMs * 2)
   redis.call('PEXPIRE', tenantLeasesKey, ttlMs * 2)
   redis.call('PEXPIRE', userLeasesKey, ttlMs * 2)
   return 2
@@ -108,6 +109,7 @@ redis.call('HSET', onlineKey, deviceId, routeValue)
 redis.call('SADD', nodeRoutesKey, routeEntry)
 redis.call('ZADD', tenantLeasesKey, expiresAt, tenantMember)
 redis.call('ZADD', userLeasesKey, expiresAt, userMember)
+redis.call('PEXPIRE', onlineKey, ttlMs * 2)
 redis.call('PEXPIRE', tenantLeasesKey, ttlMs * 2)
 redis.call('PEXPIRE', userLeasesKey, ttlMs * 2)
 return 1
@@ -163,16 +165,18 @@ return 1
 ");
 
     // KEYS:
-    // 1) tenant conn leases zset: {tenant}:conn_leases
-    // 2) user conn leases zset: {tenant}:user:{user}:conn_leases
+    // 1) online hash key: {tenant}:online:{user}
+    // 2) tenant conn leases zset: {tenant}:conn_leases
+    // 3) user conn leases zset: {tenant}:user:{user}:conn_leases
     // ARGV:
     // 1) tenantMember (user|device)
     // 2) userMember (device)
     // 3) nowMs
     // 4) ttlMs
     private static readonly LuaScript RenewLeaseScript = LuaScript.Prepare(@"
-local tenantLeasesKey = KEYS[1]
-local userLeasesKey = KEYS[2]
+local onlineKey = KEYS[1]
+local tenantLeasesKey = KEYS[2]
+local userLeasesKey = KEYS[3]
 
 local tenantMember = ARGV[1]
 local userMember = ARGV[2]
@@ -185,6 +189,7 @@ redis.call('ZREMRANGEBYSCORE', userLeasesKey, '-inf', nowMs)
 
 redis.call('ZADD', tenantLeasesKey, expiresAt, tenantMember)
 redis.call('ZADD', userLeasesKey, expiresAt, userMember)
+redis.call('PEXPIRE', onlineKey, ttlMs * 2)
 redis.call('PEXPIRE', tenantLeasesKey, ttlMs * 2)
 redis.call('PEXPIRE', userLeasesKey, ttlMs * 2)
 return 1
@@ -239,6 +244,7 @@ return 1
 
     public async ValueTask RenewLeaseAsync(string tenantId, string userId, string deviceId, int heartbeatTimeoutSeconds, CancellationToken cancellationToken)
     {
+        var onlineKey = RedisKeys.OnlineUserHash(tenantId, userId);
         var tenantLeasesKey = RedisKeys.TenantConnLeasesZset(tenantId);
         var userLeasesKey = RedisKeys.UserConnLeasesZset(tenantId, userId);
         var tenantMember = LeaseMemberCodec.TenantMember(userId, deviceId);
@@ -249,7 +255,7 @@ return 1
         cancellationToken.ThrowIfCancellationRequested();
         await _db.ScriptEvaluateAsync(
             RenewLeaseScript.ExecutableScript,
-            new RedisKey[] { tenantLeasesKey, userLeasesKey },
+            new RedisKey[] { onlineKey, tenantLeasesKey, userLeasesKey },
             new RedisValue[] { tenantMember, userMember, nowMs, ttlMs });
     }
 

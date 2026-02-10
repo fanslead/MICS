@@ -8,14 +8,32 @@ namespace Mics.Gateway.Ws;
 
 internal static class WebSocketMessageIO
 {
-    public static async ValueTask<PooledProtobufBytes?> ReadBinaryAsync(WebSocket socket, CancellationToken cancellationToken)
+    internal sealed class WebSocketFrameTooLargeException : Exception
     {
+        public WebSocketFrameTooLargeException(int maxBytes)
+            : base($"WebSocket frame too large (maxBytes={maxBytes}).")
+        {
+            MaxBytes = maxBytes;
+        }
+
+        public int MaxBytes { get; }
+    }
+
+    public static async ValueTask<PooledProtobufBytes?> ReadBinaryAsync(WebSocket socket, int maxBytes, CancellationToken cancellationToken)
+    {
+        var hardLimit = maxBytes > 0 ? maxBytes : 64 * 1024 * 1024;
+        var pause = (long)hardLimit + (4 * 1024);
+        var resume = Math.Max(64 * 1024, hardLimit / 2);
+
         var pipe = new Pipe(new PipeOptions(
             pool: MemoryPool<byte>.Shared,
             minimumSegmentSize: 4 * 1024,
-            pauseWriterThreshold: 256 * 1024,
-            resumeWriterThreshold: 128 * 1024,
+            pauseWriterThreshold: pause,
+            resumeWriterThreshold: resume,
             useSynchronizationContext: false));
+
+        byte[]? scratch = null;
+        var total = 0;
 
         try
         {
@@ -37,9 +55,11 @@ internal static class WebSocketMessageIO
                         continue;
                     }
 
+                    scratch ??= ArrayPool<byte>.Shared.Rent(8 * 1024);
+                    var drainMem = scratch.AsMemory();
                     while (!res.EndOfMessage)
                     {
-                        res = await socket.ReceiveAsync(mem, cancellationToken);
+                        res = await socket.ReceiveAsync(drainMem, cancellationToken);
                         if (res.MessageType == WebSocketMessageType.Close)
                         {
                             return null;
@@ -47,6 +67,30 @@ internal static class WebSocketMessageIO
                     }
 
                     continue;
+                }
+
+                if (maxBytes > 0)
+                {
+                    total += res.Count;
+                    if (total > maxBytes)
+                    {
+                        // Drain the rest of this message, but do not buffer.
+                        if (!res.EndOfMessage)
+                        {
+                            scratch ??= ArrayPool<byte>.Shared.Rent(8 * 1024);
+                            var drainMem = scratch.AsMemory();
+                            while (!res.EndOfMessage)
+                            {
+                                res = await socket.ReceiveAsync(drainMem, cancellationToken);
+                                if (res.MessageType == WebSocketMessageType.Close)
+                                {
+                                    return null;
+                                }
+                            }
+                        }
+
+                        throw new WebSocketFrameTooLargeException(maxBytes);
+                    }
                 }
 
                 pipe.Writer.Advance(res.Count);
@@ -72,6 +116,11 @@ internal static class WebSocketMessageIO
         }
         finally
         {
+            if (scratch is not null)
+            {
+                ArrayPool<byte>.Shared.Return(scratch);
+            }
+
             await pipe.Reader.CompleteAsync();
             await pipe.Writer.CompleteAsync();
         }

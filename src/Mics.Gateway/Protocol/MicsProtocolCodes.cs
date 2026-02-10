@@ -11,4 +11,5 @@ internal static class MicsProtocolCodes
 
     // ServerFrame.error.code
     public const int ErrorInvalidProtobuf = 4400;
+    public const int ErrorFrameTooLarge = 4401;
 }

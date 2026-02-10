@@ -118,49 +118,56 @@ internal sealed class HookClient : IHookClient
             return new AuthResult(false, "", "", null, "auth hook circuit open");
         }
 
-        var meta = _metaFactory.Create(tenantId);
-        var request = new AuthRequest
+        try
         {
-            Meta = meta,
-            Token = token,
-            DeviceId = deviceId,
-        };
-
-        if (_authSecrets.TryGet(tenantId, out var secret))
-        {
-            request.Meta.Sign = HmacSign.ComputeBase64(secret, request.Meta, PayloadForSign(request));
-        }
-        else if (policy.SignRequired)
-        {
-            RecordFailure(tenantId, HookOperation.Auth, result: "sign_required", url: authHookBaseUrl, requestId: request.Meta.RequestId);
-            _breaker.OnFailure(tenantId, HookOperation.Auth, policy.Breaker);
-            return new AuthResult(false, "", "", null, "auth hook sign required");
-        }
-
-        var authUrl = authHookBaseUrl.TrimEnd('/') + "/auth";
-        var post = await PostAsync(authUrl, HookOperation.Auth, tenantId, policy.Acquire, request, AuthResponse.Parser, cancellationToken);
-        if (post.Response is null)
-        {
-            if (ShouldCountFailureForBreaker(post.Outcome))
+            var meta = _metaFactory.Create(tenantId);
+            var request = new AuthRequest
             {
+                Meta = meta,
+                Token = token,
+                DeviceId = deviceId,
+            };
+
+            if (_authSecrets.TryGet(tenantId, out var secret))
+            {
+                request.Meta.Sign = HmacSign.ComputeBase64(secret, request.Meta, PayloadForSign(request));
+            }
+            else if (policy.SignRequired)
+            {
+                RecordFailure(tenantId, HookOperation.Auth, result: "sign_required", url: authHookBaseUrl, requestId: request.Meta.RequestId);
                 _breaker.OnFailure(tenantId, HookOperation.Auth, policy.Breaker);
+                return new AuthResult(false, "", "", null, "auth hook sign required");
             }
 
-            RecordFailure(tenantId, HookOperation.Auth, ResultLabel(post.Outcome), authUrl, request.Meta.RequestId);
-            return post.Outcome switch
+            var authUrl = authHookBaseUrl.TrimEnd('/') + "/auth";
+            var post = await PostAsync(authUrl, HookOperation.Auth, tenantId, policy.Acquire, request, AuthResponse.Parser, cancellationToken);
+            if (post.Response is null)
             {
-                HookPostOutcome.QueueRejected => new AuthResult(false, "", "", null, "hook queue rejected"),
-                HookPostOutcome.Canceled => new AuthResult(false, "", "", null, "canceled"),
-                _ => new AuthResult(false, "", "", null, "hook timeout/failure"),
-            };
-        }
+                if (ShouldCountFailureForBreaker(post.Outcome))
+                {
+                    _breaker.OnFailure(tenantId, HookOperation.Auth, policy.Breaker);
+                }
 
-        _breaker.OnSuccess(tenantId, HookOperation.Auth);
-        if (post.Response.Ok && post.Response.Config is not null)
-        {
-            _policies.Update(tenantId, post.Response.Config);
+                RecordFailure(tenantId, HookOperation.Auth, ResultLabel(post.Outcome), authUrl, request.Meta.RequestId);
+                return post.Outcome switch
+                {
+                    HookPostOutcome.QueueRejected => new AuthResult(false, "", "", null, "hook queue rejected"),
+                    HookPostOutcome.Canceled => new AuthResult(false, "", "", null, "canceled"),
+                    _ => new AuthResult(false, "", "", null, "hook timeout/failure"),
+                };
+            }
+
+            _breaker.OnSuccess(tenantId, HookOperation.Auth);
+            if (post.Response.Ok && post.Response.Config is not null)
+            {
+                _policies.Update(tenantId, post.Response.Config);
+            }
+            return new AuthResult(post.Response.Ok, post.Response.UserId, post.Response.DeviceId, post.Response.Config, post.Response.Reason);
         }
-        return new AuthResult(post.Response.Ok, post.Response.UserId, post.Response.DeviceId, post.Response.Config, post.Response.Reason);
+        finally
+        {
+            _breaker.EndAttempt(tenantId, HookOperation.Auth);
+        }
     }
 
     public async ValueTask<CheckMessageResult> CheckMessageAsync(TenantRuntimeConfig tenantConfig, string tenantId, MessageRequest message, CancellationToken cancellationToken)
@@ -173,44 +180,51 @@ internal sealed class HookClient : IHookClient
             return new CheckMessageResult(true, true, "hook circuit open");
         }
 
-        var meta = _metaFactory.Create(tenantId);
-        var request = new CheckMessageRequest
+        try
         {
-            Meta = meta,
-            Message = message,
-        };
-
-        if (!string.IsNullOrWhiteSpace(tenantConfig.TenantSecret))
-        {
-            request.Meta.Sign = HmacSign.ComputeBase64(tenantConfig.TenantSecret, request.Meta, PayloadForSign(request));
-        }
-        else if (policy.SignRequired)
-        {
-            RecordFailure(tenantId, HookOperation.CheckMessage, result: "sign_required", url: tenantConfig.HookBaseUrl, requestId: request.Meta.RequestId);
-            _breaker.OnFailure(tenantId, HookOperation.CheckMessage, policy.Breaker);
-            return new CheckMessageResult(false, false, "hook sign required");
-        }
-
-        var url = tenantConfig.HookBaseUrl.TrimEnd('/') + "/check-message";
-        var post = await PostAsync(url, HookOperation.CheckMessage, tenantId, policy.Acquire, request, CheckMessageResponse.Parser, cancellationToken);
-        if (post.Response is null)
-        {
-            if (ShouldCountFailureForBreaker(post.Outcome))
+            var meta = _metaFactory.Create(tenantId);
+            var request = new CheckMessageRequest
             {
+                Meta = meta,
+                Message = message,
+            };
+
+            if (!string.IsNullOrWhiteSpace(tenantConfig.TenantSecret))
+            {
+                request.Meta.Sign = HmacSign.ComputeBase64(tenantConfig.TenantSecret, request.Meta, PayloadForSign(request));
+            }
+            else if (policy.SignRequired)
+            {
+                RecordFailure(tenantId, HookOperation.CheckMessage, result: "sign_required", url: tenantConfig.HookBaseUrl, requestId: request.Meta.RequestId);
                 _breaker.OnFailure(tenantId, HookOperation.CheckMessage, policy.Breaker);
+                return new CheckMessageResult(false, false, "hook sign required");
             }
 
-            RecordFailure(tenantId, HookOperation.CheckMessage, ResultLabel(post.Outcome), url, request.Meta.RequestId);
-            return post.Outcome switch
+            var url = tenantConfig.HookBaseUrl.TrimEnd('/') + "/check-message";
+            var post = await PostAsync(url, HookOperation.CheckMessage, tenantId, policy.Acquire, request, CheckMessageResponse.Parser, cancellationToken);
+            if (post.Response is null)
             {
-                HookPostOutcome.QueueRejected => new CheckMessageResult(true, true, "hook queue rejected"),
-                HookPostOutcome.Canceled => new CheckMessageResult(true, true, "canceled"),
-                _ => new CheckMessageResult(true, true, "hook degraded"),
-            };
-        }
+                if (ShouldCountFailureForBreaker(post.Outcome))
+                {
+                    _breaker.OnFailure(tenantId, HookOperation.CheckMessage, policy.Breaker);
+                }
 
-        _breaker.OnSuccess(tenantId, HookOperation.CheckMessage);
-        return new CheckMessageResult(post.Response.Allow, false, post.Response.Reason);
+                RecordFailure(tenantId, HookOperation.CheckMessage, ResultLabel(post.Outcome), url, request.Meta.RequestId);
+                return post.Outcome switch
+                {
+                    HookPostOutcome.QueueRejected => new CheckMessageResult(true, true, "hook queue rejected"),
+                    HookPostOutcome.Canceled => new CheckMessageResult(true, true, "canceled"),
+                    _ => new CheckMessageResult(true, true, "hook degraded"),
+                };
+            }
+
+            _breaker.OnSuccess(tenantId, HookOperation.CheckMessage);
+            return new CheckMessageResult(post.Response.Allow, false, post.Response.Reason);
+        }
+        finally
+        {
+            _breaker.EndAttempt(tenantId, HookOperation.CheckMessage);
+        }
     }
 
     public async ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken)
@@ -223,44 +237,51 @@ internal sealed class HookClient : IHookClient
             return new GroupMembersResult(false, true, "hook circuit open", Array.Empty<string>());
         }
 
-        var meta = _metaFactory.Create(tenantId);
-        var request = new GetGroupMembersRequest
+        try
         {
-            Meta = meta,
-            GroupId = groupId,
-        };
-
-        if (!string.IsNullOrWhiteSpace(tenantConfig.TenantSecret))
-        {
-            request.Meta.Sign = HmacSign.ComputeBase64(tenantConfig.TenantSecret, request.Meta, PayloadForSign(request));
-        }
-        else if (policy.SignRequired)
-        {
-            RecordFailure(tenantId, HookOperation.GetGroupMembers, result: "sign_required", url: tenantConfig.HookBaseUrl, requestId: request.Meta.RequestId);
-            _breaker.OnFailure(tenantId, HookOperation.GetGroupMembers, policy.Breaker);
-            return new GroupMembersResult(false, false, "hook sign required", Array.Empty<string>());
-        }
-
-        var url = tenantConfig.HookBaseUrl.TrimEnd('/') + "/get-group-members";
-        var post = await PostAsync(url, HookOperation.GetGroupMembers, tenantId, policy.Acquire, request, GetGroupMembersResponse.Parser, cancellationToken);
-        if (post.Response is null)
-        {
-            if (ShouldCountFailureForBreaker(post.Outcome))
+            var meta = _metaFactory.Create(tenantId);
+            var request = new GetGroupMembersRequest
             {
+                Meta = meta,
+                GroupId = groupId,
+            };
+
+            if (!string.IsNullOrWhiteSpace(tenantConfig.TenantSecret))
+            {
+                request.Meta.Sign = HmacSign.ComputeBase64(tenantConfig.TenantSecret, request.Meta, PayloadForSign(request));
+            }
+            else if (policy.SignRequired)
+            {
+                RecordFailure(tenantId, HookOperation.GetGroupMembers, result: "sign_required", url: tenantConfig.HookBaseUrl, requestId: request.Meta.RequestId);
                 _breaker.OnFailure(tenantId, HookOperation.GetGroupMembers, policy.Breaker);
+                return new GroupMembersResult(false, false, "hook sign required", Array.Empty<string>());
             }
 
-            RecordFailure(tenantId, HookOperation.GetGroupMembers, ResultLabel(post.Outcome), url, request.Meta.RequestId);
-            return post.Outcome switch
+            var url = tenantConfig.HookBaseUrl.TrimEnd('/') + "/get-group-members";
+            var post = await PostAsync(url, HookOperation.GetGroupMembers, tenantId, policy.Acquire, request, GetGroupMembersResponse.Parser, cancellationToken);
+            if (post.Response is null)
             {
-                HookPostOutcome.QueueRejected => new GroupMembersResult(false, true, "hook queue rejected", Array.Empty<string>()),
-                HookPostOutcome.Canceled => new GroupMembersResult(false, true, "canceled", Array.Empty<string>()),
-                _ => new GroupMembersResult(false, true, "hook degraded", Array.Empty<string>()),
-            };
-        }
+                if (ShouldCountFailureForBreaker(post.Outcome))
+                {
+                    _breaker.OnFailure(tenantId, HookOperation.GetGroupMembers, policy.Breaker);
+                }
 
-        _breaker.OnSuccess(tenantId, HookOperation.GetGroupMembers);
-        return new GroupMembersResult(true, false, "", post.Response.UserIds);
+                RecordFailure(tenantId, HookOperation.GetGroupMembers, ResultLabel(post.Outcome), url, request.Meta.RequestId);
+                return post.Outcome switch
+                {
+                    HookPostOutcome.QueueRejected => new GroupMembersResult(false, true, "hook queue rejected", Array.Empty<string>()),
+                    HookPostOutcome.Canceled => new GroupMembersResult(false, true, "canceled", Array.Empty<string>()),
+                    _ => new GroupMembersResult(false, true, "hook degraded", Array.Empty<string>()),
+                };
+            }
+
+            _breaker.OnSuccess(tenantId, HookOperation.GetGroupMembers);
+            return new GroupMembersResult(true, false, "", post.Response.UserIds);
+        }
+        finally
+        {
+            _breaker.EndAttempt(tenantId, HookOperation.GetGroupMembers);
+        }
     }
 
     private async ValueTask<HookPostResult<TResponse>> PostAsync<TRequest, TResponse>(

@@ -89,4 +89,38 @@ public sealed class RedisConnectionAdmissionLeaseTests
         Assert.Contains("t1:user:u1:conn_leases", keyStrings);
         Assert.DoesNotContain("t1:conn_total", keyStrings);
     }
+
+    [Fact]
+    public async Task RenewLeaseAsync_AlsoTouchesOnlineHash_ForTtl()
+    {
+        RedisKey[]? keys = null;
+
+        var db = DispatchProxy.Create<IDatabase, DatabaseProxy>();
+        ((DatabaseProxy)(object)db).Handler = (method, args) =>
+        {
+            if (string.Equals(method.Name, "ScriptEvaluateAsync", StringComparison.Ordinal))
+            {
+                keys = (RedisKey[])args![1]!;
+                return Task.FromException<RedisResult>(new InvalidOperationException("stop"));
+            }
+
+            throw new NotSupportedException(method.Name);
+        };
+
+        var mux = DispatchProxy.Create<IConnectionMultiplexer, MultiplexerProxy>();
+        ((MultiplexerProxy)(object)mux).Database = db;
+
+        var admission = new RedisConnectionAdmission(mux, nodeId: "node-1");
+        try
+        {
+            await admission.RenewLeaseAsync("t1", "u1", "d1", heartbeatTimeoutSeconds: 30, cancellationToken: CancellationToken.None);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        Assert.NotNull(keys);
+        var keyStrings = keys!.Select(k => k.ToString()).ToArray();
+        Assert.Contains("t1:online:u1", keyStrings);
+    }
 }

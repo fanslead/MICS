@@ -21,6 +21,66 @@ namespace Mics.Tests;
 public sealed class WsMessageSizeLimitTests
 {
     [Fact]
+    public async Task Frame_TooLarge_IsRejectedBeforeParsing()
+    {
+        using var ws = new ScriptedWebSocket();
+
+        var msg = new MessageRequest
+        {
+            MsgId = "m1",
+            MsgType = MessageType.SingleChat,
+            ToUserId = "u2",
+            MsgBody = ByteString.CopyFrom(new byte[70_000]),
+            TimestampMs = 1,
+        };
+        var payload = new ClientFrame { Message = msg }.ToByteArray();
+
+        const int chunk = 8 * 1024;
+        for (var i = 0; i < payload.Length; i += chunk)
+        {
+            var len = Math.Min(chunk, payload.Length - i);
+            ws.EnqueueReceive(WebSocketMessageType.Binary, payload.AsSpan(i, len).ToArray(), endOfMessage: i + len >= payload.Length);
+        }
+
+        var metrics = new MetricsRegistry();
+        var handler = new WsGatewayHandler(
+            nodeId: "node-1",
+            publicEndpoint: "http://localhost:8080",
+            tenantAuthMap: new Dictionary<string, string>(StringComparer.Ordinal) { ["t1"] = "http://hook" },
+            hook: new NoopHookClient(),
+            connections: new ConnectionRegistry(),
+            routes: new NoopRoutes(),
+            admission: new NoopAdmission(),
+            nodes: new EmptyNodeSnapshot(),
+            nodeClients: new NoopNodeClientPool(),
+            offline: new NoopOffline(),
+            rateLimiter: new AllowRateLimiter(),
+            dedup: new AllowDedup(),
+            mq: new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero)),
+            metrics: metrics,
+            logger: NullLogger<WsGatewayHandler>.Instance,
+            traceContext: new TraceContext(),
+            shutdown: new ShutdownState(),
+            maxMessageBytes: 1,
+            groupRouteChunkSize: 256,
+            groupOfflineBufferMaxUsers: 0,
+            groupMembersMaxUsers: 1_000);
+
+        var session = new ConnectionSession("t1", "u1", "d1", "c1", "tr1", ws, new TenantRuntimeConfig { TenantMaxMessageQps = 0 });
+        await InvokeReceiveLoopAsync(handler, session);
+
+        var errors = ws.Sends
+            .Where(s => s.Type == WebSocketMessageType.Binary)
+            .Select(s => ServerFrame.Parser.ParseFrom(s.Payload))
+            .Where(f => f.PayloadCase == ServerFrame.PayloadOneofCase.Error)
+            .Select(f => f.Error)
+            .ToArray();
+
+        Assert.Single(errors);
+        Assert.Equal(4401, errors[0].Code);
+    }
+
+    [Fact]
     public async Task MessageBody_TooLarge_IsRejected()
     {
         using var ws = new ScriptedWebSocket();

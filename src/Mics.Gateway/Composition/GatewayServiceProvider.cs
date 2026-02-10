@@ -32,7 +32,7 @@ namespace Mics.Gateway.Composition;
 [Singleton(typeof(IOnlineRouteStore), typeof(OnlineRouteStore))]
 [Singleton(typeof(INodeDirectory), typeof(NodeDirectory))]
 [Singleton(typeof(IRedisRateLimiter), typeof(RedisRateLimiter))]
-[Singleton(typeof(IMessageDeduplicator), typeof(RedisMessageDeduplicator))]
+[Singleton(typeof(IMessageDeduplicator), Factory = nameof(CreateMessageDeduplicator))]
 [Singleton(typeof(IConnectionAdmission), Factory = nameof(CreateConnectionAdmission))]
 [Singleton(typeof(ITraceContext), typeof(TraceContext))]
 [Singleton(typeof(IShutdownState), typeof(ShutdownState))]
@@ -70,6 +70,11 @@ internal partial class GatewayServiceProvider
 
     public IConnectionAdmission CreateConnectionAdmission(IConnectionMultiplexer mux) =>
         new RedisConnectionAdmission(mux, Options.NodeId);
+
+    public IMessageDeduplicator CreateMessageDeduplicator(IConnectionMultiplexer mux) =>
+        string.Equals(Options.DedupMode, "redis", StringComparison.OrdinalIgnoreCase)
+            ? new RedisMessageDeduplicator(mux)
+            : new InMemoryMessageDeduplicator();
 
     public IOfflineBufferStore CreateOfflineBufferStore() =>
         new OfflineBufferStore(

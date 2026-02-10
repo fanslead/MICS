@@ -25,8 +25,28 @@ internal sealed class NodeGatewayService : NodeGateway.NodeGatewayBase
         _logger = logger;
     }
 
+    private void EnsureAuthorized(ServerCallContext context)
+    {
+        var expected = Environment.GetEnvironmentVariable("CLUSTER_GRPC_TOKEN");
+        if (string.IsNullOrWhiteSpace(expected))
+        {
+            return;
+        }
+
+        var tokenEntry = context.RequestHeaders.FirstOrDefault(h => string.Equals(h.Key, "x-mics-node-token", StringComparison.Ordinal));
+        var token = tokenEntry?.Value;
+        if (!string.Equals(token, expected, StringComparison.Ordinal))
+        {
+            _metrics.CounterInc("mics_grpc_unauthorized_total", 1);
+            _logger.LogWarning("grpc_unauthorized peer={Peer}", context.Peer);
+            throw new RpcException(new Status(StatusCode.Unauthenticated, "unauthorized"));
+        }
+    }
+
     public override async Task<ForwardAck> ForwardSingle(ForwardSingleRequest request, ServerCallContext context)
     {
+        EnsureAuthorized(context);
+
         using var scope = _logger.BeginScope(new Dictionary<string, object?>
         {
             ["TenantId"] = request.TenantId,
@@ -56,6 +76,8 @@ internal sealed class NodeGatewayService : NodeGateway.NodeGatewayBase
 
     public override async Task<ForwardAck> ForwardBatch(ForwardBatchRequest request, ServerCallContext context)
     {
+        EnsureAuthorized(context);
+
         using var scope = _logger.BeginScope(new Dictionary<string, object?>
         {
             ["TenantId"] = request.TenantId,
@@ -90,6 +112,8 @@ internal sealed class NodeGatewayService : NodeGateway.NodeGatewayBase
 
     public override Task<ForwardAck> BufferOffline(BufferOfflineRequest request, ServerCallContext context)
     {
+        EnsureAuthorized(context);
+
         var ttlSeconds = request.TtlSeconds > 0 ? request.TtlSeconds : 300;
         var ok = _offline.TryAdd(request.TenantId, request.ToUserId, request.ServerFrame.ToByteArray(), TimeSpan.FromSeconds(ttlSeconds));
         if (ok)
@@ -104,6 +128,8 @@ internal sealed class NodeGatewayService : NodeGateway.NodeGatewayBase
 
     public override Task<DrainOfflineResponse> DrainOffline(DrainOfflineRequest request, ServerCallContext context)
     {
+        EnsureAuthorized(context);
+
         var frames = _offline.Drain(request.TenantId, request.UserId);
         var response = new DrainOfflineResponse();
         foreach (var frameBytes in frames)
