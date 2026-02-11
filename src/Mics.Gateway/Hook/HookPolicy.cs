@@ -26,7 +26,7 @@ internal readonly record struct HookPolicy(HookAcquirePolicy Acquire, HookBreake
                 maxConcurrency = tenantConfig.HookMaxConcurrency;
             }
 
-            if (tenantConfig.HasHookQueueTimeoutMs && tenantConfig.HookQueueTimeoutMs >= 0)
+            if (tenantConfig.HasHookQueueTimeoutMs)
             {
                 queueTimeout = TimeSpan.FromMilliseconds(Math.Clamp(tenantConfig.HookQueueTimeoutMs, 0, 10_000));
             }
@@ -36,7 +36,7 @@ internal readonly record struct HookPolicy(HookAcquirePolicy Acquire, HookBreake
                 breakerThreshold = Math.Clamp(tenantConfig.HookBreakerFailureThreshold, 1, 100);
             }
 
-            if (tenantConfig.HasHookBreakerOpenMs && tenantConfig.HookBreakerOpenMs >= 0)
+            if (tenantConfig.HasHookBreakerOpenMs)
             {
                 breakerOpen = TimeSpan.FromMilliseconds(Math.Clamp(tenantConfig.HookBreakerOpenMs, 0, 60_000));
             }

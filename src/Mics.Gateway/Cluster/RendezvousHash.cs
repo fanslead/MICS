@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using Mics.Gateway.Infrastructure.Redis;
 
@@ -17,7 +18,7 @@ internal static class RendezvousHash
 
         foreach (var node in nodes)
         {
-            var score = Fnva64(tenantId, userId, node.NodeId);
+            var score = Sha256Score(tenantId, userId, node.NodeId);
             if (bestNode is null || score > best)
             {
                 best = score;
@@ -28,28 +29,11 @@ internal static class RendezvousHash
         return bestNode;
     }
 
-    private static ulong Fnva64(string tenantId, string userId, string nodeId)
+    private static ulong Sha256Score(string tenantId, string userId, string nodeId)
     {
-        const ulong offset = 14695981039346656037UL;
-        const ulong prime = 1099511628211UL;
-
-        var h = offset;
-        h = Fnva64(h, tenantId, prime);
-        h = Fnva64(h, ":", prime);
-        h = Fnva64(h, userId, prime);
-        h = Fnva64(h, ":", prime);
-        h = Fnva64(h, nodeId, prime);
-        return h;
-    }
-
-    private static ulong Fnva64(ulong hash, string value, ulong prime)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        foreach (var b in bytes)
-        {
-            hash ^= b;
-            hash *= prime;
-        }
-        return hash;
+        var payload = string.Concat(tenantId, ":", userId, ":", nodeId);
+        var bytes = Encoding.UTF8.GetBytes(payload);
+        var hash = SHA256.HashData(bytes);
+        return BitConverter.ToUInt64(hash, 0);
     }
 }
