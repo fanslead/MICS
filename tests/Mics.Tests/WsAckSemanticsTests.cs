@@ -142,8 +142,8 @@ public sealed class WsAckSemanticsTests
 
     private sealed class NoopOffline : IOfflineBufferStore
     {
-        public bool TryAdd(string tenantId, string toUserId, byte[] serverFrameBytes, TimeSpan ttl) => true;
-        public IReadOnlyList<byte[]> Drain(string tenantId, string userId) => Array.Empty<byte[]>();
+        public bool TryAdd(string tenantId, string toUserId, ByteString serverFrameBytes, TimeSpan ttl) => true;
+        public IReadOnlyList<ByteString> Drain(string tenantId, string userId) => Array.Empty<ByteString>();
     }
 
     private sealed class DenyCheckHookClient : IHookClient
@@ -156,6 +156,25 @@ public sealed class WsAckSemanticsTests
 
         public ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken) =>
+            new(new GetOfflineMessagesResult(true, false, "", Array.Empty<MessageRequest>(), "", false));
+    }
+
+    private sealed class AllowGroupHookClient : IHookClient
+    {
+        private readonly IReadOnlyList<string> _members;
+
+        public AllowGroupHookClient(IReadOnlyList<string> members) => _members = members;
+
+        public ValueTask<AuthResult> AuthAsync(string authHookBaseUrl, string tenantId, string token, string deviceId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public ValueTask<CheckMessageResult> CheckMessageAsync(TenantRuntimeConfig tenantConfig, string tenantId, MessageRequest message, CancellationToken cancellationToken) =>
+            new(new CheckMessageResult(Allow: true, Degraded: false, Reason: ""));
+
+        public ValueTask<GroupMembersResult> GetGroupMembersAsync(TenantRuntimeConfig tenantConfig, string tenantId, string groupId, CancellationToken cancellationToken) =>
+            new(new GroupMembersResult(Ok: true, Degraded: false, Reason: "", UserIds: _members));
 
         public ValueTask<GetOfflineMessagesResult> GetOfflineMessagesAsync(TenantRuntimeConfig tenantConfig, string tenantId, string userId, string deviceId, int maxMessages, string cursor, CancellationToken cancellationToken) =>
             new(new GetOfflineMessagesResult(true, false, "", Array.Empty<MessageRequest>(), "", false));
@@ -291,6 +310,126 @@ public sealed class WsAckSemanticsTests
         Assert.Equal("m2", ack.MsgId);
         Assert.Equal(AckStatus.Failed, ack.Status);
         Assert.Contains("group_id", ack.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GroupChat_MembersOverLimit_AcksFailed()
+    {
+        using var ws = new ScriptedWebSocket();
+
+        var frame = new ClientFrame
+        {
+            Message = new MessageRequest
+            {
+                MsgId = "m-group-too-large",
+                MsgType = MessageType.GroupChat,
+                GroupId = "g1",
+                MsgBody = ByteString.CopyFrom(new byte[] { 1 }),
+            }
+        };
+        ws.EnqueueReceive(WebSocketMessageType.Binary, frame.ToByteArray(), endOfMessage: true);
+
+        var hook = new AllowGroupHookClient(new[] { "u1", "u2", "u3", "u4" });
+        var metrics = new MetricsRegistry();
+        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
+
+        var handler = new WsGatewayHandler(
+            nodeId: "node-1",
+            publicEndpoint: "http://localhost:8080",
+            tenantAuthMap: new Dictionary<string, string>(StringComparer.Ordinal) { ["t1"] = "http://hook" },
+            hook: hook,
+            connections: new ConnectionRegistry(),
+            routes: new NoopRoutes(),
+            admission: new NoopAdmission(),
+            nodes: new EmptyNodeSnapshot(),
+            nodeClients: new NoopNodeClientPool(),
+            grpcBreaker: new GrpcNodeCircuitBreaker(TimeProvider.System),
+            grpcBreakerPolicy: new GrpcBreakerPolicy(5, TimeSpan.FromSeconds(5)),
+            offline: new NoopOffline(),
+            rateLimiter: new AllowRateLimiter(),
+            dedup: new AllowDedup(),
+            mq: mq,
+            metrics: metrics,
+            logger: NullLogger<WsGatewayHandler>.Instance,
+            traceContext: new TraceContext(),
+            shutdown: new ShutdownState(),
+            maxMessageBytes: 0,
+            groupRouteChunkSize: 256,
+            groupOfflineBufferMaxUsers: 1024,
+            groupMembersMaxUsers: 3);
+
+        var session = new ConnectionSession("t1", "u0", "d0", "c1", "tr1", ws, new TenantRuntimeConfig { TenantMaxMessageQps = 0 });
+
+        await InvokeReceiveLoopAsync(handler, session);
+
+        var ack = ParseServerFrames(ws).Single(f => f.PayloadCase == ServerFrame.PayloadOneofCase.Ack).Ack;
+        Assert.Equal("m-group-too-large", ack.MsgId);
+        Assert.Equal(AckStatus.Failed, ack.Status);
+        Assert.Equal("group too large", ack.Reason);
+    }
+
+    [Fact]
+    public async Task GroupChat_OfflineSkipped_IsReportedInAck()
+    {
+        using var ws = new ScriptedWebSocket();
+
+        var frame = new ClientFrame
+        {
+            Message = new MessageRequest
+            {
+                MsgId = "m-group-offline",
+                MsgType = MessageType.GroupChat,
+                GroupId = "g1",
+                MsgBody = ByteString.CopyFrom(new byte[] { 1 }),
+            }
+        };
+        ws.EnqueueReceive(WebSocketMessageType.Binary, frame.ToByteArray(), endOfMessage: true);
+
+        var hook = new AllowGroupHookClient(new[] { "u1", "u2", "u3", "u4", "u5" });
+        var metrics = new MetricsRegistry();
+        var mq = new MqEventDispatcher(new NoopMqProducer(), metrics, TimeProvider.System, new MqEventDispatcherOptions(QueueCapacity: 1, MaxPendingPerTenant: 1, MaxAttempts: 1, RetryBackoffBase: TimeSpan.Zero, IdleDelay: TimeSpan.Zero));
+
+        var handler = new WsGatewayHandler(
+            nodeId: "node-1",
+            publicEndpoint: "http://localhost:8080",
+            tenantAuthMap: new Dictionary<string, string>(StringComparer.Ordinal) { ["t1"] = "http://hook" },
+            hook: hook,
+            connections: new ConnectionRegistry(),
+            routes: new NoopRoutes(),
+            admission: new NoopAdmission(),
+            nodes: new EmptyNodeSnapshot(),
+            nodeClients: new NoopNodeClientPool(),
+            grpcBreaker: new GrpcNodeCircuitBreaker(TimeProvider.System),
+            grpcBreakerPolicy: new GrpcBreakerPolicy(5, TimeSpan.FromSeconds(5)),
+            offline: new NoopOffline(),
+            rateLimiter: new AllowRateLimiter(),
+            dedup: new AllowDedup(),
+            mq: mq,
+            metrics: metrics,
+            logger: NullLogger<WsGatewayHandler>.Instance,
+            traceContext: new TraceContext(),
+            shutdown: new ShutdownState(),
+            maxMessageBytes: 0,
+            groupRouteChunkSize: 256,
+            groupOfflineBufferMaxUsers: 2,
+            groupMembersMaxUsers: 1_000);
+
+        var session = new ConnectionSession("t1", "u0", "d0", "c1", "tr1", ws, new TenantRuntimeConfig
+        {
+            TenantMaxMessageQps = 0,
+            OfflineUseHookPull = false,
+            OfflineBufferTtlSeconds = 60,
+        });
+
+        await InvokeReceiveLoopAsync(handler, session);
+
+        var ack = ParseServerFrames(ws).Single(f => f.PayloadCase == ServerFrame.PayloadOneofCase.Ack).Ack;
+        Assert.Equal("m-group-offline", ack.MsgId);
+        Assert.Equal(AckStatus.Sent, ack.Status);
+        Assert.True(ack.PartialDelivery);
+        Assert.Equal((uint)0, ack.OfflineNotifiedUsers);
+        Assert.Equal((uint)2, ack.OfflineBufferedUsers);
+        Assert.Equal((uint)3, ack.OfflineSkippedUsers);
     }
 
     [Fact]

@@ -351,8 +351,13 @@ public sealed class MicsClientSdkTests
             }
         }.ToByteArray(), endOfMessage: true);
 
+        var factoryCalls = 0;
         var sockets = new Queue<IMicsWebSocket>(new IMicsWebSocket[] { ws1, ws2 });
-        IMicsWebSocket Factory() => sockets.Dequeue();
+        IMicsWebSocket Factory()
+        {
+            Interlocked.Increment(ref factoryCalls);
+            return sockets.Dequeue();
+        }
 
         var options = MicsClientOptions.Default with
         {
@@ -414,8 +419,13 @@ public sealed class MicsClientSdkTests
             }
         }.ToByteArray(), endOfMessage: true);
 
+        var factoryCalls = 0;
         var sockets = new Queue<IMicsWebSocket>(new IMicsWebSocket[] { ws1, ws2 });
-        IMicsWebSocket Factory() => sockets.Dequeue();
+        IMicsWebSocket Factory()
+        {
+            Interlocked.Increment(ref factoryCalls);
+            return sockets.Dequeue();
+        }
 
         var options = MicsClientOptions.Default with
         {
@@ -432,23 +442,24 @@ public sealed class MicsClientSdkTests
 
         ws1.CompleteReceives(); // triggers reconnect
 
-        var sendTask = client.SendSingleChatAsync(toUserId: "u2", msgBody: new byte[] { 1 }, msgId: "m-reconn", CancellationToken.None).AsTask();
+        // First wait until reconnect actually happened (second socket created), then wait for the send.
+        var reconnected = await WaitUntilAsync(() => Volatile.Read(ref factoryCalls) >= 2, TimeSpan.FromSeconds(5));
+        Assert.True(reconnected);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var sendTask = client.SendSingleChatAsync(toUserId: "u2", msgBody: new byte[] { 1 }, msgId: "m-reconn", cts.Token).AsTask();
 
         // Wait until the reconnected socket actually sends the message, then inject the Ack.
-        var waitUntil = DateTimeOffset.UtcNow.AddSeconds(1);
-        while (DateTimeOffset.UtcNow < waitUntil)
+        var sentOnWs2 = await WaitUntilAsync(() =>
         {
-            if (ws2.Sends.Any(s =>
-                {
-                    var frame = ClientFrame.Parser.ParseFrom(s.Payload);
-                    return frame.PayloadCase == ClientFrame.PayloadOneofCase.Message && frame.Message.MsgId == "m-reconn";
-                }))
+            return ws2.Sends.Any(s =>
             {
-                break;
-            }
+                var frame = ClientFrame.Parser.ParseFrom(s.Payload);
+                return frame.PayloadCase == ClientFrame.PayloadOneofCase.Message && frame.Message.MsgId == "m-reconn";
+            });
+        }, TimeSpan.FromSeconds(5));
+        Assert.True(sentOnWs2);
 
-            await Task.Delay(5);
-        }
         ws2.EnqueueReceive(new ServerFrame
         {
             Ack = new MessageAck { MsgId = "m-reconn", Status = AckStatus.Sent, TimestampMs = 1, Reason = "" }
@@ -461,6 +472,22 @@ public sealed class MicsClientSdkTests
             var frame = ClientFrame.Parser.ParseFrom(s.Payload);
             return frame.PayloadCase == ClientFrame.PayloadOneofCase.Message && frame.Message.MsgId == "m-reconn";
         });
+
+        static async Task<bool> WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.Elapsed < timeout)
+            {
+                if (predicate())
+                {
+                    return true;
+                }
+
+                await Task.Delay(5, CancellationToken.None);
+            }
+
+            return predicate();
+        }
     }
 
     private sealed class ScriptedWebSocket : IMicsWebSocket

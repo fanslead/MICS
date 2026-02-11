@@ -3,6 +3,7 @@ using Grpc.Core;
 using Mics.Contracts.Message.V1;
 using Mics.Contracts.Node.V1;
 using Mics.Gateway.Connections;
+using Mics.Gateway.Infrastructure.Pooling;
 using Mics.Gateway.Metrics;
 using Mics.Gateway.Offline;
 using Mics.Gateway.Protocol;
@@ -56,7 +57,9 @@ internal sealed class NodeGatewayService : NodeGateway.NodeGatewayBase
         var message = request.Message?.Clone() ?? new MessageRequest();
         message.TenantId = request.TenantId;
 
-        var sessions = _connections.GetAllForUser(request.TenantId, request.ToUserId);
+        using var pooled = ConnectionSessionListPool.Rent();
+        var sessions = pooled.List;
+        _connections.CopyAllForUserTo(request.TenantId, request.ToUserId, sessions);
         var frame = new ServerFrame { Delivery = new MessageDelivery { Message = message } };
         using var bytes = PooledProtobufSerializer.Serialize(frame);
 
@@ -91,9 +94,11 @@ internal sealed class NodeGatewayService : NodeGateway.NodeGatewayBase
         using var bytes = PooledProtobufSerializer.Serialize(frame);
 
         var deliveries = 0;
+        using var pooled = ConnectionSessionListPool.Rent();
+        var sessions = pooled.List;
         foreach (var userId in request.ToUserIds)
         {
-            var sessions = _connections.GetAllForUser(request.TenantId, userId);
+            _connections.CopyAllForUserTo(request.TenantId, userId, sessions);
             foreach (var session in sessions)
             {
                 if (session.Socket.State != System.Net.WebSockets.WebSocketState.Open)
@@ -115,7 +120,7 @@ internal sealed class NodeGatewayService : NodeGateway.NodeGatewayBase
         EnsureAuthorized(context);
 
         var ttlSeconds = request.TtlSeconds > 0 ? request.TtlSeconds : 300;
-        var ok = _offline.TryAdd(request.TenantId, request.ToUserId, request.ServerFrame.ToByteArray(), TimeSpan.FromSeconds(ttlSeconds));
+        var ok = _offline.TryAdd(request.TenantId, request.ToUserId, request.ServerFrame, TimeSpan.FromSeconds(ttlSeconds));
         if (ok)
         {
             _metrics.CounterInc("mics_offline_buffered_total", 1, ("tenant", request.TenantId), ("via", "grpc_in"));
@@ -134,7 +139,7 @@ internal sealed class NodeGatewayService : NodeGateway.NodeGatewayBase
         var response = new DrainOfflineResponse();
         foreach (var frameBytes in frames)
         {
-            response.ServerFrames.Add(ByteString.CopyFrom(frameBytes));
+            response.ServerFrames.Add(frameBytes);
         }
 
         _metrics.CounterInc("mics_offline_drained_total", frames.Count, ("tenant", request.TenantId), ("node", "home"));

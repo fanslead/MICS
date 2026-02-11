@@ -34,6 +34,12 @@ message MessageAck {
   AckStatus status = 2;
   int64 timestamp_ms = 3;
   string reason = 4;
+
+  // GroupChat best-effort diagnostics (zero for SingleChat).
+  bool partial_delivery = 5;
+  uint32 offline_notified_users = 6;
+  uint32 offline_buffered_users = 7;
+  uint32 offline_skipped_users = 8;
 }
 
 message ConnectAck {

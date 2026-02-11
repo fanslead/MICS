@@ -143,8 +143,8 @@ public sealed class WsForwardFailureMetricsTests
 
     private sealed class NoopOffline : IOfflineBufferStore
     {
-        public bool TryAdd(string tenantId, string toUserId, byte[] serverFrameBytes, TimeSpan ttl) => true;
-        public IReadOnlyList<byte[]> Drain(string tenantId, string userId) => Array.Empty<byte[]>();
+        public bool TryAdd(string tenantId, string toUserId, ByteString serverFrameBytes, TimeSpan ttl) => true;
+        public IReadOnlyList<ByteString> Drain(string tenantId, string userId) => Array.Empty<ByteString>();
     }
 
     private sealed class ThrowingCallInvoker : CallInvoker

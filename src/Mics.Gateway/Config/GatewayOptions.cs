@@ -13,6 +13,7 @@ internal sealed class GatewayOptions
     public int MaxMessageBytes { get; init; } = 1_048_576;
     public int OfflineBufferMaxMessagesPerUser { get; init; } = 128;
     public int OfflineBufferMaxBytesPerUser { get; init; } = 1_048_576;
+    public int OfflineBufferMaxUsersPerTenant { get; init; } = 50_000;
 
     public int GroupRouteChunkSize { get; init; } = 256;
     public int GroupOfflineBufferMaxUsers { get; init; } = 1024;
@@ -31,6 +32,12 @@ internal sealed class GatewayOptions
     public int KafkaRetryBackoffMs { get; init; } = 50;
     public int KafkaIdleDelayMs { get; init; } = 5;
 
+    // DLQ publish failure fallback: bounded in-memory retry buffer (best-effort).
+    public int KafkaDlqFallbackQueueCapacity { get; init; } = 10_000;
+    public int KafkaDlqFallbackMaxPendingPerTenant { get; init; } = 2_000;
+    public int KafkaDlqFallbackMaxAttempts { get; init; } = 20;
+    public int KafkaDlqFallbackRetryBackoffMs { get; init; } = 200;
+
     public TimeSpan HookTimeout { get; init; } = TimeSpan.FromMilliseconds(150);
     public TimeSpan HookQueueTimeout { get; init; } = TimeSpan.FromMilliseconds(10);
     public int HookMaxConcurrencyDefault { get; init; } = 32;
@@ -41,6 +48,10 @@ internal sealed class GatewayOptions
 
     public int GrpcBreakerFailureThreshold { get; init; } = 5;
     public TimeSpan GrpcBreakerOpenDuration { get; init; } = TimeSpan.FromSeconds(5);
+
+    public int AdmissionUnregisterRetryQueueCapacity { get; init; } = 50_000;
+    public int AdmissionUnregisterRetryMaxAttempts { get; init; } = 3;
+    public int AdmissionUnregisterRetryBackoffMs { get; init; } = 50;
 
     public Dictionary<string, string> TenantAuthMap { get; init; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> TenantHookSecrets { get; init; } = new(StringComparer.Ordinal);
@@ -56,6 +67,7 @@ internal sealed class GatewayOptions
         var maxMessageBytes = Math.Clamp(config.GetValue("MAX_MESSAGE_BYTES", 1_048_576), 0, 64 * 1024 * 1024);
         var offlineMaxMessagesPerUser = Math.Clamp(config.GetValue("OFFLINE_BUFFER_MAX_MESSAGES_PER_USER", 128), 0, 1_000_000);
         var offlineMaxBytesPerUser = Math.Clamp(config.GetValue("OFFLINE_BUFFER_MAX_BYTES_PER_USER", 1_048_576), 0, 256 * 1024 * 1024);
+        var offlineMaxUsersPerTenant = Math.Clamp(config.GetValue("OFFLINE_BUFFER_MAX_USERS_PER_TENANT", 50_000), 0, 1_000_000);
         var groupChunk = Math.Clamp(config.GetValue("GROUP_ROUTE_CHUNK_SIZE", 256), 1, 4096);
         var groupOfflineMax = Math.Clamp(config.GetValue("GROUP_OFFLINE_BUFFER_MAX_USERS", 1024), 0, 1_000_000);
         var groupMembersMax = Math.Clamp(config.GetValue("GROUP_MEMBERS_MAX_USERS", 200_000), 1, 5_000_000);
@@ -73,6 +85,11 @@ internal sealed class GatewayOptions
         var kafkaRetryBackoffMs = Math.Clamp(config.GetValue("KAFKA_RETRY_BACKOFF_MS", 50), 0, 10_000);
         var kafkaIdleDelayMs = Math.Clamp(config.GetValue("KAFKA_IDLE_DELAY_MS", 5), 0, 1_000);
 
+        var kafkaDlqFallbackQueueCapacity = Math.Clamp(config.GetValue("KAFKA_DLQ_FALLBACK_QUEUE_CAPACITY", 10_000), 0, 1_000_000);
+        var kafkaDlqFallbackMaxPendingPerTenant = Math.Clamp(config.GetValue("KAFKA_DLQ_FALLBACK_MAX_PENDING_PER_TENANT", 2_000), 1, 1_000_000);
+        var kafkaDlqFallbackMaxAttempts = Math.Clamp(config.GetValue("KAFKA_DLQ_FALLBACK_MAX_ATTEMPTS", 20), 1, 10_000);
+        var kafkaDlqFallbackRetryBackoffMs = Math.Clamp(config.GetValue("KAFKA_DLQ_FALLBACK_RETRY_BACKOFF_MS", 200), 0, 10_000);
+
         var tenantAuthMap = LoadTenantAuthMap(config);
         var tenantHookSecrets = LoadTenantHookSecrets(config);
         var hookSignRequired = config.GetValue("HOOK_SIGN_REQUIRED", false) || config.GetValue("Hook:SignRequired", false);
@@ -86,6 +103,10 @@ internal sealed class GatewayOptions
         var grpcBreakerFailureThreshold = Math.Clamp(config.GetValue("GRPC_BREAKER_FAILURE_THRESHOLD", 5), 1, 100);
         var grpcBreakerOpenMs = Math.Clamp(config.GetValue("GRPC_BREAKER_OPEN_MS", 5_000), 0, 60_000);
 
+        var admissionUnregisterRetryQueueCapacity = Math.Clamp(config.GetValue("ADMISSION_UNREGISTER_RETRY_QUEUE_CAPACITY", 50_000), 1, 1_000_000);
+        var admissionUnregisterRetryMaxAttempts = Math.Clamp(config.GetValue("ADMISSION_UNREGISTER_RETRY_MAX_ATTEMPTS", 3), 1, 10);
+        var admissionUnregisterRetryBackoffMs = Math.Clamp(config.GetValue("ADMISSION_UNREGISTER_RETRY_BACKOFF_MS", 50), 0, 10_000);
+
         return new GatewayOptions
         {
             NodeId = nodeId,
@@ -95,6 +116,7 @@ internal sealed class GatewayOptions
             MaxMessageBytes = maxMessageBytes,
             OfflineBufferMaxMessagesPerUser = offlineMaxMessagesPerUser,
             OfflineBufferMaxBytesPerUser = offlineMaxBytesPerUser,
+            OfflineBufferMaxUsersPerTenant = offlineMaxUsersPerTenant,
             GroupRouteChunkSize = groupChunk,
             GroupOfflineBufferMaxUsers = groupOfflineMax,
             GroupMembersMaxUsers = groupMembersMax,
@@ -107,6 +129,11 @@ internal sealed class GatewayOptions
             KafkaMaxPendingPerTenant = kafkaMaxPendingPerTenant,
             KafkaRetryBackoffMs = kafkaRetryBackoffMs,
             KafkaIdleDelayMs = kafkaIdleDelayMs,
+
+            KafkaDlqFallbackQueueCapacity = kafkaDlqFallbackQueueCapacity,
+            KafkaDlqFallbackMaxPendingPerTenant = kafkaDlqFallbackMaxPendingPerTenant,
+            KafkaDlqFallbackMaxAttempts = kafkaDlqFallbackMaxAttempts,
+            KafkaDlqFallbackRetryBackoffMs = kafkaDlqFallbackRetryBackoffMs,
             TenantAuthMap = tenantAuthMap,
             TenantHookSecrets = tenantHookSecrets,
             HookSignRequired = hookSignRequired,
@@ -119,6 +146,10 @@ internal sealed class GatewayOptions
 
             GrpcBreakerFailureThreshold = grpcBreakerFailureThreshold,
             GrpcBreakerOpenDuration = TimeSpan.FromMilliseconds(grpcBreakerOpenMs),
+
+            AdmissionUnregisterRetryQueueCapacity = admissionUnregisterRetryQueueCapacity,
+            AdmissionUnregisterRetryMaxAttempts = admissionUnregisterRetryMaxAttempts,
+            AdmissionUnregisterRetryBackoffMs = admissionUnregisterRetryBackoffMs,
         };
     }
 

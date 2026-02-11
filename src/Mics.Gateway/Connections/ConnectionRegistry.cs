@@ -5,14 +5,15 @@ internal interface IConnectionRegistry
     bool TryAdd(ConnectionSession session);
     bool TryRemove(string tenantId, string userId, string deviceId, out ConnectionSession? removed);
     bool TryGet(string tenantId, string userId, string deviceId, out ConnectionSession? session);
-    IReadOnlyList<ConnectionSession> GetAllForUser(string tenantId, string userId);
-    IReadOnlyList<ConnectionSession> GetAllSessionsSnapshot();
+    void CopyAllForUserTo(string tenantId, string userId, List<ConnectionSession> destination);
+    void CopyAllSessionsTo(List<ConnectionSession> destination);
 }
 
 internal sealed class ConnectionRegistry : IConnectionRegistry
 {
     private readonly Dictionary<(string TenantId, string UserId), Dictionary<string, ConnectionSession>> _map = new();
     private readonly object _lock = new();
+    private int _totalSessions;
 
     public bool TryAdd(ConnectionSession session)
     {
@@ -31,6 +32,7 @@ internal sealed class ConnectionRegistry : IConnectionRegistry
             }
 
             byDevice[session.DeviceId] = session;
+            _totalSessions++;
             return true;
         }
     }
@@ -49,6 +51,11 @@ internal sealed class ConnectionRegistry : IConnectionRegistry
             if (!byDevice.Remove(deviceId, out removed))
             {
                 return false;
+            }
+
+            if (_totalSessions > 0)
+            {
+                _totalSessions--;
             }
 
             if (byDevice.Count == 0)
@@ -70,31 +77,52 @@ internal sealed class ConnectionRegistry : IConnectionRegistry
         }
     }
 
-    public IReadOnlyList<ConnectionSession> GetAllForUser(string tenantId, string userId)
+    public void CopyAllForUserTo(string tenantId, string userId, List<ConnectionSession> destination)
     {
         lock (_lock)
         {
-            return _map.TryGetValue((tenantId, userId), out var byDevice)
-                ? byDevice.Values.ToArray()
-                : Array.Empty<ConnectionSession>();
+            destination.Clear();
+            if (!_map.TryGetValue((tenantId, userId), out var byDevice) || byDevice.Count == 0)
+            {
+                return;
+            }
+
+            if (destination.Capacity < byDevice.Count)
+            {
+                destination.Capacity = byDevice.Count;
+            }
+
+            foreach (var s in byDevice.Values)
+            {
+                destination.Add(s);
+            }
         }
     }
 
-    public IReadOnlyList<ConnectionSession> GetAllSessionsSnapshot()
+    public void CopyAllSessionsTo(List<ConnectionSession> destination)
     {
         lock (_lock)
         {
+            destination.Clear();
             if (_map.Count == 0)
             {
-                return Array.Empty<ConnectionSession>();
+                return;
             }
 
-            var list = new List<ConnectionSession>();
+            var total = _totalSessions;
+
+            if (destination.Capacity < total)
+            {
+                destination.Capacity = total;
+            }
+
             foreach (var byDevice in _map.Values)
             {
-                list.AddRange(byDevice.Values);
+                foreach (var s in byDevice.Values)
+                {
+                    destination.Add(s);
+                }
             }
-            return list;
         }
     }
 }

@@ -70,7 +70,7 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
             return new Dictionary<string, OnlineDeviceRoute>(StringComparer.Ordinal);
         }
 
-        var result = new Dictionary<string, OnlineDeviceRoute>(StringComparer.Ordinal);
+        var result = new Dictionary<string, OnlineDeviceRoute>(entries.Length, StringComparer.Ordinal);
         foreach (var entry in entries)
         {
             if (!entry.Value.HasValue)
@@ -102,12 +102,56 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
             return new Dictionary<string, IReadOnlyList<OnlineDeviceRoute>>(StringComparer.Ordinal);
         }
 
-        var batch = _db.CreateBatch();
-        var tasks = new Task<HashEntry[]>[userIds.Count];
+        var result = new Dictionary<string, IReadOnlyList<OnlineDeviceRoute>>(userIds.Count, StringComparer.Ordinal);
 
-        for (var i = 0; i < userIds.Count; i++)
+        int[]? missIndices = null;
+        var missCount = 0;
+
+        if (_cacheTtl > TimeSpan.Zero)
         {
-            var userId = userIds[i];
+            missIndices = new int[userIds.Count];
+
+            for (var i = 0; i < userIds.Count; i++)
+            {
+                var userId = userIds[i];
+                if (_cache.TryGet(tenantId, userId, out var cached) && cached.Count > 0)
+                {
+                    var routes = new OnlineDeviceRoute[cached.Count];
+                    var idx = 0;
+                    foreach (var route in cached.Values)
+                    {
+                        routes[idx++] = route;
+                    }
+
+                    result[userId] = routes;
+                    continue;
+                }
+
+                missIndices[missCount++] = i;
+            }
+
+            if (missCount == 0)
+            {
+                return result;
+            }
+        }
+        else
+        {
+            missIndices = new int[userIds.Count];
+            for (var i = 0; i < userIds.Count; i++)
+            {
+                missIndices[i] = i;
+            }
+
+            missCount = userIds.Count;
+        }
+
+        var batch = _db.CreateBatch();
+        var tasks = new Task<HashEntry[]>[missCount];
+
+        for (var i = 0; i < missCount; i++)
+        {
+            var userId = userIds[missIndices[i]];
             tasks[i] = batch.HashGetAllAsync(RedisKeys.OnlineUserHash(tenantId, userId));
         }
 
@@ -123,10 +167,11 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
             return new Dictionary<string, IReadOnlyList<OnlineDeviceRoute>>(StringComparer.Ordinal);
         }
 
-        var result = new Dictionary<string, IReadOnlyList<OnlineDeviceRoute>>(StringComparer.Ordinal);
-        for (var i = 0; i < userIds.Count; i++)
+        for (var i = 0; i < missCount; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            var userId = userIds[missIndices[i]];
 
             HashEntry[] entries;
             try
@@ -145,6 +190,7 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
             }
 
             List<OnlineDeviceRoute>? routes = null;
+            Dictionary<string, OnlineDeviceRoute>? cacheRoutes = null;
             foreach (var entry in entries)
             {
                 if (!entry.Value.HasValue)
@@ -154,14 +200,25 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
 
                 if (OnlineDeviceRouteCodec.TryDecode(entry.Value.ToString(), out var route) && route is not null)
                 {
-                    routes ??= new List<OnlineDeviceRoute>(entries.Length);
+                    routes ??= new List<OnlineDeviceRoute>(Math.Min(entries.Length, 4));
                     routes.Add(route);
+
+                    if (_cacheTtl > TimeSpan.Zero)
+                    {
+                        cacheRoutes ??= new Dictionary<string, OnlineDeviceRoute>(entries.Length, StringComparer.Ordinal);
+                        cacheRoutes[entry.Name.ToString()] = route;
+                    }
                 }
             }
 
             if (routes is { Count: > 0 })
             {
-                result[userIds[i]] = routes;
+                result[userId] = routes;
+
+                if (cacheRoutes is { Count: > 0 })
+                {
+                    _cache.Set(tenantId, userId, cacheRoutes, _cacheTtl);
+                }
             }
         }
 

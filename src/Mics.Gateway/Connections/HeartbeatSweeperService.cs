@@ -20,7 +20,7 @@ internal sealed class HeartbeatSweeperService : BackgroundService
         {
             try
             {
-                await _sweeper.SweepOnceAsync(stoppingToken);
+                await _sweeper.SweepTickAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {

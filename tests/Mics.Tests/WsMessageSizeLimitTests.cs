@@ -255,8 +255,8 @@ public sealed class WsMessageSizeLimitTests
 
     private sealed class NoopOffline : IOfflineBufferStore
     {
-        public bool TryAdd(string tenantId, string userId, byte[] serverFrameBytes, TimeSpan ttl) => true;
-        public IReadOnlyList<byte[]> Drain(string tenantId, string userId) => Array.Empty<byte[]>();
+        public bool TryAdd(string tenantId, string userId, ByteString serverFrameBytes, TimeSpan ttl) => true;
+        public IReadOnlyList<ByteString> Drain(string tenantId, string userId) => Array.Empty<ByteString>();
     }
 
     private sealed class AllowRateLimiter : IRedisRateLimiter

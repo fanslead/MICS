@@ -138,13 +138,13 @@ public sealed class WsGroupFanoutLimitsTests
     {
         public int Adds { get; private set; }
 
-        public bool TryAdd(string tenantId, string toUserId, byte[] serverFrameBytes, TimeSpan ttl)
+        public bool TryAdd(string tenantId, string toUserId, ByteString serverFrameBytes, TimeSpan ttl)
         {
             Adds++;
             return true;
         }
 
-        public IReadOnlyList<byte[]> Drain(string tenantId, string userId) => Array.Empty<byte[]>();
+        public IReadOnlyList<ByteString> Drain(string tenantId, string userId) => Array.Empty<ByteString>();
     }
 
     private sealed class BlockingBatchRoutes : IOnlineRouteStore

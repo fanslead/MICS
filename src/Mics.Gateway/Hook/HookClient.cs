@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using System.Buffers;
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Threading;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Mics.Contracts.Hook.V1;
@@ -28,6 +30,28 @@ internal interface IHookClient
 
 internal sealed class HookClient : IHookClient
 {
+    private sealed class PooledByteArrayContent : ByteArrayContent
+    {
+        private byte[]? _buffer;
+
+        public PooledByteArrayContent(byte[] buffer, int length)
+            : base(buffer, 0, length)
+        {
+            _buffer = buffer;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+
+            var buf = Interlocked.Exchange(ref _buffer, null);
+            if (buf is not null)
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+            }
+        }
+    }
+
     private sealed class HookLogLimiter
     {
         private readonly ConcurrentDictionary<(string TenantId, HookOperation Op, string Result), long> _lastLogUnixMs = new();
@@ -378,12 +402,27 @@ internal sealed class HookClient : IHookClient
 
         var startedAt = Stopwatch.GetTimestamp();
 
-        var bytes = request.ToByteArray();
-        using var content = new ByteArrayContent(bytes);
-        content.Headers.ContentType = new MediaTypeHeaderValue("application/protobuf");
-
+        var size = request.CalculateSize();
+        byte[]? rented = ArrayPool<byte>.Shared.Rent(size);
+        HttpContent? content = null;
         try
         {
+            using (var ms = new System.IO.MemoryStream(rented, 0, size, writable: true, publiclyVisible: true))
+            {
+                var cos = new CodedOutputStream(ms, leaveOpen: true);
+                request.WriteTo(cos);
+                cos.Flush();
+
+                if (ms.Position != size)
+                {
+                    throw new InvalidOperationException($"protobuf size mismatch: expected {size} bytes, wrote {ms.Position} bytes");
+                }
+            }
+
+            content = new PooledByteArrayContent(rented, size);
+            rented = null;
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/protobuf");
+
             using var resp = await _http.PostAsync(url, content, cts.Token);
             if (!resp.IsSuccessStatusCode)
             {
@@ -431,6 +470,12 @@ internal sealed class HookClient : IHookClient
         }
         finally
         {
+            content?.Dispose();
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+
             var elapsed = Stopwatch.GetElapsedTime(startedAt);
             var ms = (long)elapsed.TotalMilliseconds;
             _metrics.CounterInc("mics_hook_duration_ms_total", ms, ("tenant", tenantId), ("op", op.ToString()));

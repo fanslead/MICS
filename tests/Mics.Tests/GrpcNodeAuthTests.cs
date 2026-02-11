@@ -7,6 +7,7 @@ using Mics.Gateway.Connections;
 using Mics.Gateway.Grpc;
 using Mics.Gateway.Metrics;
 using Mics.Gateway.Offline;
+using Google.Protobuf;
 
 namespace Mics.Tests;
 
@@ -78,14 +79,17 @@ public sealed class GrpcNodeAuthTests
         public bool TryAdd(ConnectionSession session) => true;
         public bool TryRemove(string tenantId, string userId, string deviceId, out ConnectionSession? removed) { removed = null; return true; }
         public bool TryGet(string tenantId, string userId, string deviceId, out ConnectionSession? session) { session = null; return false; }
-        public IReadOnlyList<ConnectionSession> GetAllForUser(string tenantId, string userId) => Array.Empty<ConnectionSession>();
-        public IReadOnlyList<ConnectionSession> GetAllSessionsSnapshot() => Array.Empty<ConnectionSession>();
+        public void CopyAllForUserTo(string tenantId, string userId, List<ConnectionSession> destination)
+        {
+            destination.Clear();
+        }
+        public void CopyAllSessionsTo(List<ConnectionSession> destination) => destination.Clear();
     }
 
     private sealed class NoopOffline : IOfflineBufferStore
     {
-        public bool TryAdd(string tenantId, string userId, byte[] serverFrameBytes, TimeSpan ttl) => true;
-        public IReadOnlyList<byte[]> Drain(string tenantId, string userId) => Array.Empty<byte[]>();
+        public bool TryAdd(string tenantId, string userId, ByteString serverFrameBytes, TimeSpan ttl) => true;
+        public IReadOnlyList<ByteString> Drain(string tenantId, string userId) => Array.Empty<ByteString>();
     }
 
     private sealed class TestCallContext : ServerCallContext

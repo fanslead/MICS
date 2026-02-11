@@ -55,8 +55,15 @@ public sealed class HeartbeatSweeperTests
         public bool TryAdd(ConnectionSession session) => throw new NotSupportedException();
         public bool TryRemove(string tenantId, string userId, string deviceId, out ConnectionSession? removed) => throw new NotSupportedException();
         public bool TryGet(string tenantId, string userId, string deviceId, out ConnectionSession? session) => throw new NotSupportedException();
-        public IReadOnlyList<ConnectionSession> GetAllForUser(string tenantId, string userId) => throw new NotSupportedException();
-        public IReadOnlyList<ConnectionSession> GetAllSessionsSnapshot() => _sessions;
+        public void CopyAllForUserTo(string tenantId, string userId, List<ConnectionSession> destination) => throw new NotSupportedException();
+        public void CopyAllSessionsTo(List<ConnectionSession> destination)
+        {
+            destination.Clear();
+            foreach (var s in _sessions)
+            {
+                destination.Add(s);
+            }
+        }
     }
 
     private sealed class FakeWebSocket : WebSocket

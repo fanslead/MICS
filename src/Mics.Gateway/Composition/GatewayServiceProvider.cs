@@ -35,6 +35,9 @@ namespace Mics.Gateway.Composition;
 [Singleton(typeof(INodeDirectory), typeof(NodeDirectory))]
 [Singleton(typeof(IRedisRateLimiter), typeof(RedisRateLimiter))]
 [Singleton(typeof(IMessageDeduplicator), Factory = nameof(CreateMessageDeduplicator))]
+[Singleton(typeof(RedisConnectionAdmission), Factory = nameof(CreateRedisConnectionAdmission))]
+[Singleton(typeof(AdmissionUnregisterRetryQueue), Factory = nameof(CreateAdmissionUnregisterRetryQueue))]
+[Singleton(typeof(AdmissionUnregisterRetryService), Factory = nameof(CreateAdmissionUnregisterRetryService))]
 [Singleton(typeof(IConnectionAdmission), Factory = nameof(CreateConnectionAdmission))]
 [Singleton(typeof(ITraceContext), typeof(TraceContext))]
 [Singleton(typeof(IShutdownState), typeof(ShutdownState))]
@@ -70,8 +73,33 @@ internal partial class GatewayServiceProvider
     public required ILoggerFactory LoggerFactory { get; set; }
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
-    public IConnectionAdmission CreateConnectionAdmission(IConnectionMultiplexer mux) =>
+    public RedisConnectionAdmission CreateRedisConnectionAdmission(IConnectionMultiplexer mux) =>
         new RedisConnectionAdmission(mux, Options.NodeId);
+
+    public AdmissionUnregisterRetryQueue CreateAdmissionUnregisterRetryQueue() =>
+        new AdmissionUnregisterRetryQueue(Options.AdmissionUnregisterRetryQueueCapacity);
+
+    public AdmissionUnregisterRetryService CreateAdmissionUnregisterRetryService(
+        RedisConnectionAdmission inner,
+        AdmissionUnregisterRetryQueue queue,
+        MetricsRegistry metrics,
+        ILogger<AdmissionUnregisterRetryService> logger,
+        TimeProvider timeProvider) =>
+        new AdmissionUnregisterRetryService(
+            inner,
+            queue,
+            metrics,
+            logger,
+            timeProvider,
+            Options.AdmissionUnregisterRetryMaxAttempts,
+            TimeSpan.FromMilliseconds(Options.AdmissionUnregisterRetryBackoffMs));
+
+    public IConnectionAdmission CreateConnectionAdmission(
+        RedisConnectionAdmission inner,
+        AdmissionUnregisterRetryQueue queue,
+        MetricsRegistry metrics,
+        ILogger<ResilientConnectionAdmission> logger) =>
+        new ResilientConnectionAdmission(inner, queue, metrics, logger);
 
     public IMessageDeduplicator CreateMessageDeduplicator(IConnectionMultiplexer mux) =>
         string.Equals(Options.DedupMode, "redis", StringComparison.OrdinalIgnoreCase)
@@ -83,10 +111,12 @@ internal partial class GatewayServiceProvider
             ? new NoopLocalRouteCache()
             : new LocalRouteCache(Options.LocalRouteCacheSizeBytes);
 
-    public IOfflineBufferStore CreateOfflineBufferStore() =>
+    public IOfflineBufferStore CreateOfflineBufferStore(MetricsRegistry metrics) =>
         new OfflineBufferStore(
             maxMessagesPerUser: Options.OfflineBufferMaxMessagesPerUser,
-            maxBytesPerUser: Options.OfflineBufferMaxBytesPerUser);
+            maxBytesPerUser: Options.OfflineBufferMaxBytesPerUser,
+            maxUsersPerTenant: Options.OfflineBufferMaxUsersPerTenant,
+            metrics: metrics);
 
     public HookPolicyDefaults CreateHookPolicyDefaults() =>
         new HookPolicyDefaults(
@@ -186,7 +216,11 @@ internal partial class GatewayServiceProvider
                 MaxPendingPerTenant: Options.KafkaMaxPendingPerTenant,
                 MaxAttempts: Options.KafkaMaxAttempts,
                 RetryBackoffBase: TimeSpan.FromMilliseconds(Options.KafkaRetryBackoffMs),
-                IdleDelay: TimeSpan.FromMilliseconds(Options.KafkaIdleDelayMs)));
+                IdleDelay: TimeSpan.FromMilliseconds(Options.KafkaIdleDelayMs),
+                DlqFallbackQueueCapacity: Options.KafkaDlqFallbackQueueCapacity,
+                DlqFallbackMaxPendingPerTenant: Options.KafkaDlqFallbackMaxPendingPerTenant,
+                DlqFallbackMaxAttempts: Options.KafkaDlqFallbackMaxAttempts,
+                DlqFallbackRetryBackoffBase: TimeSpan.FromMilliseconds(Options.KafkaDlqFallbackRetryBackoffMs)));
 
     public DeadNodeCleanupService CreateDeadNodeCleanupService(
         IConnectionMultiplexer mux,

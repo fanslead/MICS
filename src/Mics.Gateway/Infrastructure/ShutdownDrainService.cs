@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Mics.Gateway.Connections;
 using Mics.Gateway.Infrastructure.Redis;
+using Mics.Gateway.Infrastructure.Pooling;
 using Mics.Gateway.Metrics;
 using Mics.Gateway.Protocol;
 
@@ -42,7 +43,9 @@ internal sealed class ShutdownDrainService : IHostedService
     {
         _shutdown.BeginDrain();
 
-        var sessions = _connections.GetAllSessionsSnapshot();
+        using var lease = ConnectionSessionListPool.Rent();
+        var sessions = lease.List;
+        _connections.CopyAllSessionsTo(sessions);
         if (sessions.Count == 0)
         {
             return;

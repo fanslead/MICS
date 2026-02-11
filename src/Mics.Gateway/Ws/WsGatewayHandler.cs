@@ -10,6 +10,7 @@ using Mics.Gateway.Connections;
 using Mics.Gateway.Grpc;
 using Mics.Gateway.Hook;
 using Mics.Gateway.Infrastructure;
+using Mics.Gateway.Infrastructure.Pooling;
 using Mics.Gateway.Infrastructure.Redis;
 using Mics.Gateway.Metrics;
 using Mics.Gateway.Mq;
@@ -434,7 +435,8 @@ internal sealed class WsGatewayHandler
                         continue;
                     }
 
-                    var (delivered, deliveryReason) = await HandleGroupChatAsync(session, msg, members.UserIds, cancellationToken);
+                    var (delivered, deliveryReason, offlineNotified, offlineBuffered, offlineSkipped) =
+                        await HandleGroupChatAsync(session, msg, members.UserIds, cancellationToken);
                     _mq.TryEnqueue(MqEventFactory.CreateForMessage(msg, _nodeId, session.TraceId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), session.TenantConfig.TenantSecret));
 
                     await SendFrameAsync(socket, new ServerFrame
@@ -444,7 +446,11 @@ internal sealed class WsGatewayHandler
                             MsgId = msg.MsgId,
                             Status = delivered ? AckStatus.Sent : AckStatus.Failed,
                             TimestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                            Reason = delivered ? "" : deliveryReason
+                            Reason = delivered ? "" : deliveryReason,
+                            PartialDelivery = offlineSkipped > 0,
+                            OfflineNotifiedUsers = (uint)Math.Max(0, offlineNotified),
+                            OfflineBufferedUsers = (uint)Math.Max(0, offlineBuffered),
+                            OfflineSkippedUsers = (uint)Math.Max(0, offlineSkipped),
                         }
                     }, cancellationToken);
                 }
@@ -517,7 +523,7 @@ internal sealed class WsGatewayHandler
         }
 
         var ttl = TimeSpan.FromSeconds(session.TenantConfig.OfflineBufferTtlSeconds > 0 ? session.TenantConfig.OfflineBufferTtlSeconds : 300);
-        var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteArray();
+        var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteString();
 
         var deliveredAny = false;
         var failed = 0;
@@ -566,7 +572,7 @@ internal sealed class WsGatewayHandler
         return deliveredAny ? (true, "") : (false, failed > 0 ? "delivery failed" : "no routes delivered");
     }
 
-    private async Task<(bool Ok, string Reason)> HandleGroupChatAsync(
+    private async Task<(bool Ok, string Reason, int OfflineNotified, int OfflineBuffered, int OfflineSkipped)> HandleGroupChatAsync(
         ConnectionSession session,
         MessageRequest msg,
         IReadOnlyList<string> memberUserIds,
@@ -575,7 +581,7 @@ internal sealed class WsGatewayHandler
         _metrics.CounterInc("mics_group_messages_total", 1, ("tenant", session.TenantId));
         if (memberUserIds.Count == 0)
         {
-            return (false, "group members empty");
+            return (false, "group members empty", 0, 0, 0);
         }
 
         var distinctMembers = new List<string>(memberUserIds.Count);
@@ -595,8 +601,11 @@ internal sealed class WsGatewayHandler
 
         if (distinctMembers.Count > _groupMembersMaxUsers)
         {
-            _metrics.CounterInc("mics_group_members_capped_total", distinctMembers.Count - _groupMembersMaxUsers, ("tenant", session.TenantId));
-            distinctMembers.RemoveRange(_groupMembersMaxUsers, distinctMembers.Count - _groupMembersMaxUsers);
+            var over = distinctMembers.Count - _groupMembersMaxUsers;
+            _metrics.CounterInc("mics_group_members_over_limit_total", over, ("tenant", session.TenantId));
+            // Keep the old metric for backwards compatibility with existing dashboards.
+            _metrics.CounterInc("mics_group_members_capped_total", over, ("tenant", session.TenantId));
+            return (false, "group too large", 0, 0, 0);
         }
 
         _metrics.CounterInc("mics_group_members_total", distinctMembers.Count, ("tenant", session.TenantId));
@@ -606,12 +615,12 @@ internal sealed class WsGatewayHandler
         var offlineSkipped = 0;
         var deliveredAny = false;
         var ttl = TimeSpan.FromSeconds(session.TenantConfig.OfflineBufferTtlSeconds > 0 ? session.TenantConfig.OfflineBufferTtlSeconds : 300);
-        var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteArray();
+        var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteString();
 
         var chunkSize = _groupRouteChunkSize;
         if (distinctMembers.Count == 0)
         {
-            return (false, "group members empty");
+            return (false, "group members empty", 0, 0, 0);
         }
 
         var offset = 0;
@@ -718,7 +727,7 @@ internal sealed class WsGatewayHandler
                 continue;
             }
 
-            var forwarded = await ForwardBatchAsync(nodeId, bucket.Endpoint, session.TenantId, bucket.Users.ToArray(), msg, cancellationToken);
+            var forwarded = await ForwardBatchAsync(nodeId, bucket.Endpoint, session.TenantId, bucket.Users, bucket.Users.Count, msg, cancellationToken);
             if (forwarded)
             {
                 deliveredAny = true;
@@ -780,7 +789,9 @@ internal sealed class WsGatewayHandler
             _metrics.CounterInc("mics_group_offline_buffer_skipped_total", offlineSkipped, ("tenant", session.TenantId));
         }
 
-        return deliveredAny ? (true, "") : (false, "delivery failed");
+        return deliveredAny
+            ? (true, "", offlineNotified, offlineBuffered, offlineSkipped)
+            : (false, "delivery failed", offlineNotified, offlineBuffered, offlineSkipped);
     }
 
     private static string[] SliceMembers(IReadOnlyList<string> members, int offset, int chunkSize)
@@ -826,8 +837,10 @@ internal sealed class WsGatewayHandler
 
 	    private async Task<int> DeliverLocalAsync(string tenantId, string toUserId, MessageRequest msg, CancellationToken cancellationToken)
 	    {
-	        var sessions = _connections.GetAllForUser(tenantId, toUserId);
-	        if (sessions.Count == 0)
+            using var pooled = ConnectionSessionListPool.Rent();
+            var sessions = pooled.List;
+            _connections.CopyAllForUserTo(tenantId, toUserId, sessions);
+            if (sessions.Count == 0)
 	        {
 	            return 0;
 	        }
@@ -865,15 +878,16 @@ internal sealed class WsGatewayHandler
 
         try
         {
+            var req = new ForwardSingleRequest { TenantId = tenantId, ToUserId = toUserId, Message = msg };
+            var headers = BuildClusterGrpcHeaders();
 
             for (var attempt = 1; attempt <= maxRetries; attempt++)
             {
                 try
                 {
                     var client = _nodeClients.Get(endpoint);
-                    var headers = BuildClusterGrpcHeaders();
                     await client.ForwardSingleAsync(
-                        new ForwardSingleRequest { TenantId = tenantId, ToUserId = toUserId, Message = msg },
+                        req,
                         headers: headers,
                         deadline: DateTime.UtcNow.AddMilliseconds(250),
                         cancellationToken: cancellationToken);
@@ -919,7 +933,7 @@ internal sealed class WsGatewayHandler
         }
     }
 
-    private async Task<bool> ForwardBatchAsync(string targetNodeId, string endpoint, string tenantId, IReadOnlyList<string> toUserIds, MessageRequest msg, CancellationToken cancellationToken)
+    private async Task<bool> ForwardBatchAsync(string targetNodeId, string endpoint, string tenantId, IEnumerable<string> toUserIds, int toUserCount, MessageRequest msg, CancellationToken cancellationToken)
     {
         const int maxRetries = 2;
 
@@ -927,7 +941,7 @@ internal sealed class WsGatewayHandler
 
         if (!_grpcBreaker.TryBegin(targetNodeId))
         {
-            _metrics.CounterInc("mics_grpc_circuit_open_total", toUserIds.Count, ("tenant", tenantId), ("node", targetNodeId), ("via", "grpc_batch"));
+            _metrics.CounterInc("mics_grpc_circuit_open_total", toUserCount, ("tenant", tenantId), ("node", targetNodeId), ("via", "grpc_batch"));
             return false;
         }
 
@@ -935,18 +949,18 @@ internal sealed class WsGatewayHandler
 
         try
         {
+            var req = new ForwardBatchRequest { TenantId = tenantId, Message = msg };
+            req.ToUserIds.Capacity = toUserCount;
+            req.ToUserIds.AddRange(toUserIds);
+            var headers = BuildClusterGrpcHeaders();
 
             for (var attempt = 1; attempt <= maxRetries; attempt++)
             {
                 try
                 {
-                    var req = new ForwardBatchRequest { TenantId = tenantId, Message = msg };
-                    req.ToUserIds.AddRange(toUserIds);
-
                     var client = _nodeClients.Get(endpoint);
-                    var headers = BuildClusterGrpcHeaders();
                     await client.ForwardBatchAsync(req, headers: headers, deadline: DateTime.UtcNow.AddMilliseconds(250), cancellationToken: cancellationToken);
-                    _metrics.CounterInc("mics_deliveries_total", toUserIds.Count, ("tenant", tenantId), ("via", "grpc_batch"));
+                    _metrics.CounterInc("mics_deliveries_total", toUserCount, ("tenant", tenantId), ("via", "grpc_batch"));
                     _grpcBreaker.OnSuccess(targetNodeId);
                     completed = true;
                     return true;
@@ -960,15 +974,15 @@ internal sealed class WsGatewayHandler
                     if (shouldRetry && attempt < maxRetries)
                     {
                         _logger.LogWarning("grpc_forward_batch_retry attempt={Attempt} users={Users} msg={MsgId} endpoint={Endpoint} status={Status}",
-                            attempt, toUserIds.Count, msg.MsgId, endpoint, ex.StatusCode);
+                            attempt, toUserCount, msg.MsgId, endpoint, ex.StatusCode);
                         await Task.Delay(50 * attempt, cancellationToken);
                         continue;
                     }
 
                     _grpcBreaker.OnFailure(targetNodeId, _grpcBreakerPolicy);
                     completed = true;
-                    _metrics.CounterInc("mics_grpc_forward_failed_total", toUserIds.Count, ("tenant", tenantId), ("via", "grpc_batch"), ("status", ex.StatusCode.ToString()));
-                    _logger.LogWarning(ex, "grpc_forward_batch_failed users={Users} msg={MsgId} endpoint={Endpoint} status={Status}", toUserIds.Count, msg.MsgId, endpoint, ex.StatusCode);
+                    _metrics.CounterInc("mics_grpc_forward_failed_total", toUserCount, ("tenant", tenantId), ("via", "grpc_batch"), ("status", ex.StatusCode.ToString()));
+                    _logger.LogWarning(ex, "grpc_forward_batch_failed users={Users} msg={MsgId} endpoint={Endpoint} status={Status}", toUserCount, msg.MsgId, endpoint, ex.StatusCode);
                     return false;
                 }
             }
@@ -1000,12 +1014,12 @@ internal sealed class WsGatewayHandler
             }
         }
 
-        var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteArray();
+        var frameBytes = new ServerFrame { Delivery = new MessageDelivery { Message = msg } }.ToByteString();
         var ttl = TimeSpan.FromSeconds(session.TenantConfig.OfflineBufferTtlSeconds > 0 ? session.TenantConfig.OfflineBufferTtlSeconds : 300);
         _ = await BufferOfflineFrameBytesAsync(session, toUserId, frameBytes, ttl, cancellationToken);
     }
 
-    private async Task<bool> BufferOfflineFrameBytesAsync(ConnectionSession session, string toUserId, byte[] frameBytes, TimeSpan ttl, CancellationToken cancellationToken)
+    private async Task<bool> BufferOfflineFrameBytesAsync(ConnectionSession session, string toUserId, ByteString frameBytes, TimeSpan ttl, CancellationToken cancellationToken)
     {
         if (ttl <= TimeSpan.Zero)
         {
@@ -1035,7 +1049,7 @@ internal sealed class WsGatewayHandler
             {
                 TenantId = session.TenantId,
                 ToUserId = toUserId,
-                ServerFrame = ByteString.CopyFrom(frameBytes),
+                ServerFrame = frameBytes,
                 TtlSeconds = (int)Math.Clamp(ttl.TotalSeconds, 1, int.MaxValue),
             }, headers: BuildClusterGrpcHeaders(), cancellationToken: cancellationToken);
 
@@ -1066,11 +1080,22 @@ internal sealed class WsGatewayHandler
         }
 
         var homeNodeId = RendezvousHash.PickNodeId(session.TenantId, session.UserId, _nodes.Current) ?? _nodeId;
-        IReadOnlyList<byte[]> frames;
+        var drained = 0;
 
         if (homeNodeId == _nodeId)
         {
-            frames = _offline.Drain(session.TenantId, session.UserId);
+            var frames = _offline.Drain(session.TenantId, session.UserId);
+
+            foreach (var frameBytes in frames)
+            {
+                if (session.Socket.State != WebSocketState.Open)
+                {
+                    return;
+                }
+
+                await session.Socket.SendAsync(frameBytes.Memory, WebSocketMessageType.Binary, true, cancellationToken);
+                drained++;
+            }
         }
         else
         {
@@ -1087,7 +1112,17 @@ internal sealed class WsGatewayHandler
                     new DrainOfflineRequest { TenantId = session.TenantId, UserId = session.UserId },
                     headers: BuildClusterGrpcHeaders(),
                     cancellationToken: cancellationToken);
-                frames = resp.ServerFrames.Select(b => b.ToByteArray()).ToArray();
+
+                foreach (var frameBytes in resp.ServerFrames)
+                {
+                    if (session.Socket.State != WebSocketState.Open)
+                    {
+                        return;
+                    }
+
+                    await session.Socket.SendAsync(frameBytes.Memory, WebSocketMessageType.Binary, true, cancellationToken);
+                    drained++;
+                }
             }
             catch (RpcException ex)
             {
@@ -1097,19 +1132,9 @@ internal sealed class WsGatewayHandler
             }
         }
 
-        foreach (var frameBytes in frames)
+        if (drained > 0)
         {
-            if (session.Socket.State != WebSocketState.Open)
-            {
-                return;
-            }
-
-            await session.Socket.SendAsync(frameBytes, WebSocketMessageType.Binary, true, cancellationToken);
-        }
-
-        if (frames.Count > 0)
-        {
-            _metrics.CounterInc("mics_offline_drained_total", frames.Count, ("tenant", session.TenantId), ("node", _nodeId));
+            _metrics.CounterInc("mics_offline_drained_total", drained, ("tenant", session.TenantId), ("node", _nodeId));
         }
     }
 

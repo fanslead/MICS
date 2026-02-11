@@ -213,8 +213,8 @@ public sealed class WsGrpcForwardFailureAckTests
 
     private sealed class RejectOffline : IOfflineBufferStore
     {
-        public bool TryAdd(string tenantId, string userId, byte[] serverFrameBytes, TimeSpan ttl) => false;
-        public IReadOnlyList<byte[]> Drain(string tenantId, string userId) => Array.Empty<byte[]>();
+        public bool TryAdd(string tenantId, string userId, ByteString serverFrameBytes, TimeSpan ttl) => false;
+        public IReadOnlyList<ByteString> Drain(string tenantId, string userId) => Array.Empty<ByteString>();
     }
 
     private sealed class ThrowingCallInvoker : CallInvoker

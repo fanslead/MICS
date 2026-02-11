@@ -74,6 +74,7 @@ builder.Services.AddSingleton<IShutdownState>(sp => sp.GetRequiredService<Gatewa
 
 builder.Services.AddHostedService(sp => sp.GetRequiredService<GatewayServiceProvider>().GetService<MqEventDispatcherService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<GatewayServiceProvider>().GetService<HeartbeatSweeperService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<GatewayServiceProvider>().GetService<AdmissionUnregisterRetryService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<GatewayServiceProvider>().GetService<DeadNodeCleanupService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<NodeSnapshotService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<GatewayServiceProvider>().GetService<ShutdownDrainService>());
