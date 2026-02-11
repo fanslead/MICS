@@ -437,7 +437,9 @@ MICS 接口分为三类：客户端与网关接口（WebSocket）、网关与外
 
 ### 6.2.1 连接建立接口
 
-URL：ws://{gateway-domain}:{port}/ws?tenantId={TenantId}&token={Token}&deviceId={DeviceId}
+URL（生产建议）：wss://{gateway-domain}/ws?tenantId={TenantId}&token={Token}&deviceId={DeviceId}
+
+说明：公网入口应强制 TLS（WSS）。内网/本地联调可使用 `ws://`（例如端口转发或直连网关 Pod）。
 
 参数说明：
 

@@ -25,7 +25,7 @@ internal static class GroupFanoutPlanner
                 continue;
             }
 
-            foreach (var nodeRoute in routes.DistinctBy(r => r.NodeId, StringComparer.Ordinal))
+            foreach (var nodeRoute in routes)
             {
                 if (!buckets.TryGetValue(nodeRoute.NodeId, out var bucket))
                 {
@@ -47,4 +47,3 @@ internal static class GroupFanoutPlanner
             .ToArray();
     }
 }
-

@@ -1,4 +1,7 @@
 using StackExchange.Redis;
+using Mics.Gateway.Config;
+using Mics.Gateway.Infrastructure;
+using Mics.Gateway.Metrics;
 
 namespace Mics.Gateway.Infrastructure.Redis;
 
@@ -14,10 +17,17 @@ internal interface IOnlineRouteStore
 internal sealed class OnlineRouteStore : IOnlineRouteStore
 {
     private readonly IDatabase _db;
+    private readonly ILocalRouteCache _cache;
+    private readonly TimeSpan _cacheTtl;
+    private readonly MetricsRegistry _metrics;
 
-    public OnlineRouteStore(IConnectionMultiplexer mux)
+    public OnlineRouteStore(IConnectionMultiplexer mux, ILocalRouteCache cache, GatewayOptions options, MetricsRegistry metrics)
     {
         _db = mux.GetDatabase();
+        _cache = cache;
+        var ttlSeconds = Math.Clamp(options.LocalRouteCacheTtlSeconds, 0, 60);
+        _cacheTtl = ttlSeconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(ttlSeconds);
+        _metrics = metrics;
     }
 
     public async ValueTask UpsertAsync(string tenantId, string userId, string deviceId, OnlineDeviceRoute route, CancellationToken cancellationToken)
@@ -27,6 +37,7 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
 
         cancellationToken.ThrowIfCancellationRequested();
         await _db.HashSetAsync(key, deviceId, value);
+        _cache.Invalidate(tenantId, userId);
     }
 
     public async ValueTask RemoveAsync(string tenantId, string userId, string deviceId, CancellationToken cancellationToken)
@@ -34,14 +45,30 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
         var key = RedisKeys.OnlineUserHash(tenantId, userId);
         cancellationToken.ThrowIfCancellationRequested();
         await _db.HashDeleteAsync(key, deviceId);
+        _cache.Invalidate(tenantId, userId);
     }
 
     public async ValueTask<IReadOnlyDictionary<string, OnlineDeviceRoute>> GetAllDevicesAsync(string tenantId, string userId, CancellationToken cancellationToken)
     {
+        if (_cacheTtl > TimeSpan.Zero && _cache.TryGet(tenantId, userId, out var cached))
+        {
+            return cached;
+        }
+
         var key = RedisKeys.OnlineUserHash(tenantId, userId);
 
         cancellationToken.ThrowIfCancellationRequested();
-        var entries = await _db.HashGetAllAsync(key);
+
+        HashEntry[] entries;
+        try
+        {
+            entries = await _db.HashGetAllAsync(key);
+        }
+        catch (RedisException)
+        {
+            _metrics.CounterInc("mics_redis_fallback_total", 1, ("tenantId", tenantId), ("op", "route_get"));
+            return new Dictionary<string, OnlineDeviceRoute>(StringComparer.Ordinal);
+        }
 
         var result = new Dictionary<string, OnlineDeviceRoute>(StringComparer.Ordinal);
         foreach (var entry in entries)
@@ -55,6 +82,11 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
             {
                 result[entry.Name.ToString()] = route;
             }
+        }
+
+        if (_cacheTtl > TimeSpan.Zero && result.Count > 0)
+        {
+            _cache.Set(tenantId, userId, result, _cacheTtl);
         }
 
         return result;
@@ -81,14 +113,32 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
 
         batch.Execute();
 
-        await Task.WhenAll(tasks);
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch (RedisException)
+        {
+            _metrics.CounterInc("mics_redis_fallback_total", 1, ("tenantId", tenantId), ("op", "route_get_batch"));
+            return new Dictionary<string, IReadOnlyList<OnlineDeviceRoute>>(StringComparer.Ordinal);
+        }
 
         var result = new Dictionary<string, IReadOnlyList<OnlineDeviceRoute>>(StringComparer.Ordinal);
         for (var i = 0; i < userIds.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var entries = tasks[i].Result;
+            HashEntry[] entries;
+            try
+            {
+                entries = tasks[i].Result;
+            }
+            catch (RedisException)
+            {
+                // A single failed task shouldn't bring down the whole batch; treat that user as offline.
+                _metrics.CounterInc("mics_redis_fallback_total", 1, ("tenantId", tenantId), ("op", "route_get_batch_item"));
+                continue;
+            }
             if (entries.Length == 0)
             {
                 continue;
@@ -122,6 +172,14 @@ internal sealed class OnlineRouteStore : IOnlineRouteStore
     {
         var key = RedisKeys.OnlineUserHash(tenantId, userId);
         cancellationToken.ThrowIfCancellationRequested();
-        return await _db.HashLengthAsync(key);
+        try
+        {
+            return await _db.HashLengthAsync(key);
+        }
+        catch (RedisException)
+        {
+            _metrics.CounterInc("mics_redis_fallback_total", 1, ("tenantId", tenantId), ("op", "route_len"));
+            return 0;
+        }
     }
 }

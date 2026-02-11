@@ -25,6 +25,11 @@ data:
   # Optional: hook isolation defaults.
   HOOK_MAX_CONCURRENCY: "32"
   HOOK_QUEUE_TIMEOUT_MS: "10"
+  # Optional: gRPC (inter-node) circuit breaker.
+  # - Failure threshold opens the breaker for the target node.
+  # - Open duration is in milliseconds.
+  GRPC_BREAKER_FAILURE_THRESHOLD: "5"
+  GRPC_BREAKER_OPEN_MS: "5000"
   # Optional: graceful drain timeout on shutdown (0=skip drain).
   DRAIN_TIMEOUT_SECONDS: "10"
   # Optional: Kafka MQ hook (producer). Leave empty to disable.

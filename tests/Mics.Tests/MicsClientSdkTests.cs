@@ -434,7 +434,21 @@ public sealed class MicsClientSdkTests
 
         var sendTask = client.SendSingleChatAsync(toUserId: "u2", msgBody: new byte[] { 1 }, msgId: "m-reconn", CancellationToken.None).AsTask();
 
-        await Task.Delay(60);
+        // Wait until the reconnected socket actually sends the message, then inject the Ack.
+        var waitUntil = DateTimeOffset.UtcNow.AddSeconds(1);
+        while (DateTimeOffset.UtcNow < waitUntil)
+        {
+            if (ws2.Sends.Any(s =>
+                {
+                    var frame = ClientFrame.Parser.ParseFrom(s.Payload);
+                    return frame.PayloadCase == ClientFrame.PayloadOneofCase.Message && frame.Message.MsgId == "m-reconn";
+                }))
+            {
+                break;
+            }
+
+            await Task.Delay(5);
+        }
         ws2.EnqueueReceive(new ServerFrame
         {
             Ack = new MessageAck { MsgId = "m-reconn", Status = AckStatus.Sent, TimestampMs = 1, Reason = "" }
@@ -453,11 +467,21 @@ public sealed class MicsClientSdkTests
     {
         private readonly Channel<(byte[] Payload, bool EndOfMessage)> _receives = Channel.CreateUnbounded<(byte[], bool)>();
         private readonly List<(WebSocketMessageType Type, byte[] Payload)> _sends = new();
+        private readonly object _lock = new();
         private WebSocketState _state = WebSocketState.Open;
 
         public WebSocketState State => _state;
 
-        public IReadOnlyList<(WebSocketMessageType Type, byte[] Payload)> Sends => _sends;
+        public IReadOnlyList<(WebSocketMessageType Type, byte[] Payload)> Sends
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _sends.ToArray();
+                }
+            }
+        }
 
         public void EnqueueReceive(byte[] payload, bool endOfMessage) =>
             _receives.Writer.TryWrite((payload, endOfMessage));
@@ -502,7 +526,10 @@ public sealed class MicsClientSdkTests
 
         public ValueTask SendAsync(ReadOnlyMemory<byte> buffer, WebSocketMessageType messageType, WebSocketMessageFlags messageFlags, CancellationToken cancellationToken)
         {
-            _sends.Add((messageType, buffer.ToArray()));
+            lock (_lock)
+            {
+                _sends.Add((messageType, buffer.ToArray()));
+            }
             return ValueTask.CompletedTask;
         }
     }

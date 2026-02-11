@@ -34,6 +34,8 @@ internal sealed class WsGatewayHandler
     private readonly IConnectionAdmission _admission;
     private readonly INodeSnapshot _nodes;
     private readonly INodeClientPool _nodeClients;
+    private readonly GrpcNodeCircuitBreaker _grpcBreaker;
+    private readonly GrpcBreakerPolicy _grpcBreakerPolicy;
     private readonly IOfflineBufferStore _offline;
     private readonly IRedisRateLimiter _rateLimiter;
     private readonly IMessageDeduplicator _dedup;
@@ -55,6 +57,8 @@ internal sealed class WsGatewayHandler
         IConnectionAdmission admission,
         INodeSnapshot nodes,
         INodeClientPool nodeClients,
+        GrpcNodeCircuitBreaker grpcBreaker,
+        GrpcBreakerPolicy grpcBreakerPolicy,
         IOfflineBufferStore offline,
         IRedisRateLimiter rateLimiter,
         IMessageDeduplicator dedup,
@@ -81,6 +85,8 @@ internal sealed class WsGatewayHandler
         _admission = admission;
         _nodes = nodes;
         _nodeClients = nodeClients;
+        _grpcBreaker = grpcBreaker;
+        _grpcBreakerPolicy = grpcBreakerPolicy;
         _offline = offline;
         _rateLimiter = rateLimiter;
         _dedup = dedup;
@@ -527,7 +533,7 @@ internal sealed class WsGatewayHandler
             else
             {
                 var endpoint = group.First().Endpoint;
-                var forwarded = await ForwardSingleAsync(endpoint, session.TenantId, msg.ToUserId, msg, cancellationToken);
+                var forwarded = await ForwardSingleAsync(group.Key, endpoint, session.TenantId, msg.ToUserId, msg, cancellationToken);
                 if (forwarded)
                 {
                     deliveredAny = true;
@@ -596,6 +602,7 @@ internal sealed class WsGatewayHandler
         _metrics.CounterInc("mics_group_members_total", distinctMembers.Count, ("tenant", session.TenantId));
         var nodeBuckets = new Dictionary<string, (string Endpoint, HashSet<string> Users)>(StringComparer.Ordinal);
         var offlineBuffered = 0;
+        var offlineNotified = 0;
         var offlineSkipped = 0;
         var deliveredAny = false;
         var ttl = TimeSpan.FromSeconds(session.TenantConfig.OfflineBufferTtlSeconds > 0 ? session.TenantConfig.OfflineBufferTtlSeconds : 300);
@@ -630,6 +637,24 @@ internal sealed class WsGatewayHandler
             {
                 if (!routesByUser.TryGetValue(memberUserId, out var routes) || routes.Count == 0)
                 {
+                    if (session.TenantConfig.OfflineUseHookPull)
+                    {
+                        var evt = MqEventFactory.CreateOfflineMessageForRecipient(
+                            msg,
+                            memberUserId,
+                            _nodeId,
+                            session.TraceId,
+                            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                            session.TenantConfig.TenantSecret);
+
+                        if (_mq.TryEnqueue(evt))
+                        {
+                            offlineNotified++;
+                            deliveredAny = true;
+                            continue;
+                        }
+                    }
+
                     if (_groupOfflineBufferMaxUsers > 0 && offlineBuffered < _groupOfflineBufferMaxUsers)
                     {
                         if (await BufferOfflineFrameBytesAsync(session, memberUserId, frameBytes, ttl, cancellationToken))
@@ -650,8 +675,8 @@ internal sealed class WsGatewayHandler
                     continue;
                 }
 
-                // 一个用户可能多端分布在多个节点：按 nodeId 去重加入桶（每 node 只需 userId 一次，节点侧会投递到其所有 device sessions）
-                foreach (var nodeRoute in routes.DistinctBy(r => r.NodeId, StringComparer.Ordinal))
+                // 一个用户可能多端分布在多个节点：将该用户加入其出现过的每个节点桶（同一节点去重由 HashSet 负责）
+                foreach (var nodeRoute in routes)
                 {
                     if (!nodeBuckets.TryGetValue(nodeRoute.NodeId, out var bucket))
                     {
@@ -693,7 +718,7 @@ internal sealed class WsGatewayHandler
                 continue;
             }
 
-            var forwarded = await ForwardBatchAsync(bucket.Endpoint, session.TenantId, bucket.Users.ToArray(), msg, cancellationToken);
+            var forwarded = await ForwardBatchAsync(nodeId, bucket.Endpoint, session.TenantId, bucket.Users.ToArray(), msg, cancellationToken);
             if (forwarded)
             {
                 deliveredAny = true;
@@ -703,6 +728,24 @@ internal sealed class WsGatewayHandler
             // Degrade: buffer offline for users of the failed node bucket (bounded).
             foreach (var u in bucket.Users)
             {
+                if (session.TenantConfig.OfflineUseHookPull)
+                {
+                    var evt = MqEventFactory.CreateOfflineMessageForRecipient(
+                        msg,
+                        u,
+                        _nodeId,
+                        session.TraceId,
+                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        session.TenantConfig.TenantSecret);
+
+                    if (_mq.TryEnqueue(evt))
+                    {
+                        offlineNotified++;
+                        deliveredAny = true;
+                        continue;
+                    }
+                }
+
                 if (_groupOfflineBufferMaxUsers > 0 && offlineBuffered >= _groupOfflineBufferMaxUsers)
                 {
                     offlineSkipped++;
@@ -722,6 +765,11 @@ internal sealed class WsGatewayHandler
         }
 
         _metrics.CounterInc("mics_group_fanout_nodes_total", nodeBuckets.Count, ("tenant", session.TenantId));
+        if (offlineNotified > 0)
+        {
+            _metrics.CounterInc("mics_group_offline_notified_total", offlineNotified, ("tenant", session.TenantId));
+        }
+
         if (offlineBuffered > 0)
         {
             _metrics.CounterInc("mics_group_offline_buffered_total", offlineBuffered, ("tenant", session.TenantId));
@@ -801,45 +849,142 @@ internal sealed class WsGatewayHandler
         return sessions.Count;
     }
 
-    private async Task<bool> ForwardSingleAsync(string endpoint, string tenantId, string toUserId, MessageRequest msg, CancellationToken cancellationToken)
+    private async Task<bool> ForwardSingleAsync(string targetNodeId, string endpoint, string tenantId, string toUserId, MessageRequest msg, CancellationToken cancellationToken)
     {
+        const int maxRetries = 2;
+
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        if (!_grpcBreaker.TryBegin(targetNodeId))
+        {
+            _metrics.CounterInc("mics_grpc_circuit_open_total", 1, ("tenant", tenantId), ("node", targetNodeId), ("via", "grpc_single"));
+            return false;
+        }
+
+        var completed = false;
+
         try
         {
-            var client = _nodeClients.Get(endpoint);
-            var headers = BuildClusterGrpcHeaders();
-            await client.ForwardSingleAsync(
-                new ForwardSingleRequest { TenantId = tenantId, ToUserId = toUserId, Message = msg },
-                headers: headers,
-                cancellationToken: cancellationToken);
-            _metrics.CounterInc("mics_deliveries_total", 1, ("tenant", tenantId), ("via", "grpc_single"));
-            return true;
-        }
-        catch (RpcException ex)
-        {
-            _metrics.CounterInc("mics_grpc_forward_failed_total", 1, ("tenant", tenantId), ("via", "grpc_single"), ("status", ex.StatusCode.ToString()));
-            _logger.LogWarning(ex, "grpc_forward_single_failed to={ToUserId} msg={MsgId} endpoint={Endpoint} status={Status}", toUserId, msg.MsgId, endpoint, ex.StatusCode);
+
+            for (var attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    var client = _nodeClients.Get(endpoint);
+                    var headers = BuildClusterGrpcHeaders();
+                    await client.ForwardSingleAsync(
+                        new ForwardSingleRequest { TenantId = tenantId, ToUserId = toUserId, Message = msg },
+                        headers: headers,
+                        deadline: DateTime.UtcNow.AddMilliseconds(250),
+                        cancellationToken: cancellationToken);
+                    _metrics.CounterInc("mics_deliveries_total", 1, ("tenant", tenantId), ("via", "grpc_single"));
+                    _grpcBreaker.OnSuccess(targetNodeId);
+                    completed = true;
+                    return true;
+                }
+                catch (RpcException ex)
+                {
+                    var shouldRetry = ex.StatusCode is StatusCode.Unavailable
+                        or StatusCode.DeadlineExceeded
+                        or StatusCode.ResourceExhausted;
+
+                    if (shouldRetry && attempt < maxRetries)
+                    {
+                        _logger.LogWarning("grpc_forward_single_retry attempt={Attempt} to={ToUserId} msg={MsgId} endpoint={Endpoint} status={Status}",
+                            attempt, toUserId, msg.MsgId, endpoint, ex.StatusCode);
+                        await Task.Delay(50 * attempt, cancellationToken);
+                        continue;
+                    }
+
+                    _grpcBreaker.OnFailure(targetNodeId, _grpcBreakerPolicy);
+                    completed = true;
+                    _metrics.CounterInc("mics_grpc_forward_failed_total", 1, ("tenant", tenantId), ("via", "grpc_single"), ("status", ex.StatusCode.ToString()));
+                    _logger.LogWarning(ex, "grpc_forward_single_failed to={ToUserId} msg={MsgId} endpoint={Endpoint} status={Status}", toUserId, msg.MsgId, endpoint, ex.StatusCode);
+                    return false;
+                }
+            }
+
+            _grpcBreaker.OnFailure(targetNodeId, _grpcBreakerPolicy);
+            completed = true;
             return false;
+        }
+        finally
+        {
+            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
+            _metrics.HistogramObserve("mics_grpc_forward_duration_ms", elapsed.TotalMilliseconds, ("tenant", tenantId), ("via", "grpc_single"));
+            if (!completed)
+            {
+                _grpcBreaker.EndAttempt(targetNodeId);
+            }
         }
     }
 
-    private async Task<bool> ForwardBatchAsync(string endpoint, string tenantId, IReadOnlyList<string> toUserIds, MessageRequest msg, CancellationToken cancellationToken)
+    private async Task<bool> ForwardBatchAsync(string targetNodeId, string endpoint, string tenantId, IReadOnlyList<string> toUserIds, MessageRequest msg, CancellationToken cancellationToken)
     {
+        const int maxRetries = 2;
+
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        if (!_grpcBreaker.TryBegin(targetNodeId))
+        {
+            _metrics.CounterInc("mics_grpc_circuit_open_total", toUserIds.Count, ("tenant", tenantId), ("node", targetNodeId), ("via", "grpc_batch"));
+            return false;
+        }
+
+        var completed = false;
+
         try
         {
-            var req = new ForwardBatchRequest { TenantId = tenantId, Message = msg };
-            req.ToUserIds.AddRange(toUserIds);
 
-            var client = _nodeClients.Get(endpoint);
-            var headers = BuildClusterGrpcHeaders();
-            await client.ForwardBatchAsync(req, headers: headers, cancellationToken: cancellationToken);
-            _metrics.CounterInc("mics_deliveries_total", toUserIds.Count, ("tenant", tenantId), ("via", "grpc_batch"));
-            return true;
-        }
-        catch (RpcException ex)
-        {
-            _metrics.CounterInc("mics_grpc_forward_failed_total", toUserIds.Count, ("tenant", tenantId), ("via", "grpc_batch"), ("status", ex.StatusCode.ToString()));
-            _logger.LogWarning(ex, "grpc_forward_batch_failed users={Users} msg={MsgId} endpoint={Endpoint} status={Status}", toUserIds.Count, msg.MsgId, endpoint, ex.StatusCode);
+            for (var attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    var req = new ForwardBatchRequest { TenantId = tenantId, Message = msg };
+                    req.ToUserIds.AddRange(toUserIds);
+
+                    var client = _nodeClients.Get(endpoint);
+                    var headers = BuildClusterGrpcHeaders();
+                    await client.ForwardBatchAsync(req, headers: headers, deadline: DateTime.UtcNow.AddMilliseconds(250), cancellationToken: cancellationToken);
+                    _metrics.CounterInc("mics_deliveries_total", toUserIds.Count, ("tenant", tenantId), ("via", "grpc_batch"));
+                    _grpcBreaker.OnSuccess(targetNodeId);
+                    completed = true;
+                    return true;
+                }
+                catch (RpcException ex)
+                {
+                    var shouldRetry = ex.StatusCode is StatusCode.Unavailable
+                        or StatusCode.DeadlineExceeded
+                        or StatusCode.ResourceExhausted;
+
+                    if (shouldRetry && attempt < maxRetries)
+                    {
+                        _logger.LogWarning("grpc_forward_batch_retry attempt={Attempt} users={Users} msg={MsgId} endpoint={Endpoint} status={Status}",
+                            attempt, toUserIds.Count, msg.MsgId, endpoint, ex.StatusCode);
+                        await Task.Delay(50 * attempt, cancellationToken);
+                        continue;
+                    }
+
+                    _grpcBreaker.OnFailure(targetNodeId, _grpcBreakerPolicy);
+                    completed = true;
+                    _metrics.CounterInc("mics_grpc_forward_failed_total", toUserIds.Count, ("tenant", tenantId), ("via", "grpc_batch"), ("status", ex.StatusCode.ToString()));
+                    _logger.LogWarning(ex, "grpc_forward_batch_failed users={Users} msg={MsgId} endpoint={Endpoint} status={Status}", toUserIds.Count, msg.MsgId, endpoint, ex.StatusCode);
+                    return false;
+                }
+            }
+
+            _grpcBreaker.OnFailure(targetNodeId, _grpcBreakerPolicy);
+            completed = true;
             return false;
+        }
+        finally
+        {
+            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
+            _metrics.HistogramObserve("mics_grpc_forward_duration_ms", elapsed.TotalMilliseconds, ("tenant", tenantId), ("via", "grpc_batch"));
+            if (!completed)
+            {
+                _grpcBreaker.EndAttempt(targetNodeId);
+            }
         }
     }
 

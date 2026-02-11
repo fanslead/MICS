@@ -435,6 +435,7 @@ internal sealed class HookClient : IHookClient
             var ms = (long)elapsed.TotalMilliseconds;
             _metrics.CounterInc("mics_hook_duration_ms_total", ms, ("tenant", tenantId), ("op", op.ToString()));
             _metrics.CounterInc("mics_hook_duration_ms_count", 1, ("tenant", tenantId), ("op", op.ToString()));
+            _metrics.HistogramObserve("mics_hook_duration_ms", elapsed.TotalMilliseconds, ("tenant", tenantId), ("op", op.ToString()));
         }
     }
 

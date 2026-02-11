@@ -203,6 +203,8 @@ public sealed class TraceIdPropagationTests
             admission: new NoopAdmission(),
             nodes: new EmptyNodeSnapshot(),
             nodeClients: new NoopNodeClientPool(),
+            grpcBreaker: new GrpcNodeCircuitBreaker(TimeProvider.System),
+            grpcBreakerPolicy: new GrpcBreakerPolicy(5, TimeSpan.FromSeconds(5)),
             offline: new NoopOffline(),
             rateLimiter: new AllowRateLimiter(),
             dedup: new AllowDedup(),

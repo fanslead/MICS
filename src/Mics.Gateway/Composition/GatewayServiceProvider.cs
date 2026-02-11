@@ -25,9 +25,11 @@ namespace Mics.Gateway.Composition;
 [Transient(typeof(ILogger<>), typeof(Logger<>))]
 
 [Singleton(typeof(MetricsRegistry))]
+[Singleton(typeof(ILocalRouteCache), Factory = nameof(CreateLocalRouteCache))]
 [Singleton(typeof(IConnectionRegistry), typeof(ConnectionRegistry))]
 [Singleton(typeof(IOfflineBufferStore), Factory = nameof(CreateOfflineBufferStore))]
 [Singleton(typeof(INodeClientPool), typeof(NodeClientPool))]
+[Singleton(typeof(GrpcNodeCircuitBreaker))]
 
 [Singleton(typeof(IOnlineRouteStore), typeof(OnlineRouteStore))]
 [Singleton(typeof(INodeDirectory), typeof(NodeDirectory))]
@@ -76,6 +78,11 @@ internal partial class GatewayServiceProvider
             ? new RedisMessageDeduplicator(mux)
             : new InMemoryMessageDeduplicator();
 
+    public ILocalRouteCache CreateLocalRouteCache() =>
+        Options.LocalRouteCacheTtlSeconds <= 0 || Options.LocalRouteCacheSizeBytes <= 0
+            ? new NoopLocalRouteCache()
+            : new LocalRouteCache(Options.LocalRouteCacheSizeBytes);
+
     public IOfflineBufferStore CreateOfflineBufferStore() =>
         new OfflineBufferStore(
             maxMessagesPerUser: Options.OfflineBufferMaxMessagesPerUser,
@@ -117,6 +124,7 @@ internal partial class GatewayServiceProvider
         IConnectionAdmission admission,
         INodeSnapshot nodes,
         INodeClientPool nodeClients,
+        GrpcNodeCircuitBreaker grpcBreaker,
         IOfflineBufferStore offline,
         IRedisRateLimiter rateLimiter,
         IMessageDeduplicator dedup,
@@ -135,6 +143,8 @@ internal partial class GatewayServiceProvider
             admission,
             nodes,
             nodeClients,
+            grpcBreaker,
+            new GrpcBreakerPolicy(Options.GrpcBreakerFailureThreshold, Options.GrpcBreakerOpenDuration),
             offline,
             rateLimiter,
             dedup,

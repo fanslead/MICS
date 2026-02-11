@@ -18,6 +18,9 @@ internal sealed class GatewayOptions
     public int GroupOfflineBufferMaxUsers { get; init; } = 1024;
     public int GroupMembersMaxUsers { get; init; } = 200_000;
 
+    public long LocalRouteCacheSizeBytes { get; init; } = 100 * 1024 * 1024;
+    public int LocalRouteCacheTtlSeconds { get; init; } = 5;
+
     // Dedup state is short-lived and should be treated as best-effort.
     // Supported: "memory" (default), "redis".
     public string DedupMode { get; init; } = "memory";
@@ -36,6 +39,9 @@ internal sealed class GatewayOptions
     public TimeSpan NodeTtl { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
+    public int GrpcBreakerFailureThreshold { get; init; } = 5;
+    public TimeSpan GrpcBreakerOpenDuration { get; init; } = TimeSpan.FromSeconds(5);
+
     public Dictionary<string, string> TenantAuthMap { get; init; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> TenantHookSecrets { get; init; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> TenantHookMaxConcurrency { get; init; } = new(StringComparer.Ordinal);
@@ -53,6 +59,8 @@ internal sealed class GatewayOptions
         var groupChunk = Math.Clamp(config.GetValue("GROUP_ROUTE_CHUNK_SIZE", 256), 1, 4096);
         var groupOfflineMax = Math.Clamp(config.GetValue("GROUP_OFFLINE_BUFFER_MAX_USERS", 1024), 0, 1_000_000);
         var groupMembersMax = Math.Clamp(config.GetValue("GROUP_MEMBERS_MAX_USERS", 200_000), 1, 5_000_000);
+        var localRouteCacheSizeBytes = config.GetValue<long>("LOCAL_ROUTE_CACHE_SIZE_BYTES", 100L * 1024 * 1024);
+        var localRouteCacheTtlSeconds = Math.Clamp(config.GetValue("LOCAL_ROUTE_CACHE_TTL_SECONDS", 5), 0, 60);
         var dedupMode = (config["DEDUP_MODE"] ?? "memory").Trim();
         if (!string.Equals(dedupMode, "redis", StringComparison.OrdinalIgnoreCase))
         {
@@ -75,6 +83,9 @@ internal sealed class GatewayOptions
         var breakerOpenMs = Math.Clamp(config.GetValue("HOOK_BREAKER_OPEN_MS", 5_000), 0, 60_000);
         var drainTimeoutSeconds = Math.Clamp(config.GetValue("DRAIN_TIMEOUT_SECONDS", 10), 0, 600);
 
+        var grpcBreakerFailureThreshold = Math.Clamp(config.GetValue("GRPC_BREAKER_FAILURE_THRESHOLD", 5), 1, 100);
+        var grpcBreakerOpenMs = Math.Clamp(config.GetValue("GRPC_BREAKER_OPEN_MS", 5_000), 0, 60_000);
+
         return new GatewayOptions
         {
             NodeId = nodeId,
@@ -87,6 +98,8 @@ internal sealed class GatewayOptions
             GroupRouteChunkSize = groupChunk,
             GroupOfflineBufferMaxUsers = groupOfflineMax,
             GroupMembersMaxUsers = groupMembersMax,
+            LocalRouteCacheSizeBytes = localRouteCacheSizeBytes,
+            LocalRouteCacheTtlSeconds = localRouteCacheTtlSeconds,
             DedupMode = dedupMode,
             KafkaBootstrapServers = kafka,
             KafkaMaxAttempts = kafkaMaxAttempts,
@@ -103,6 +116,9 @@ internal sealed class GatewayOptions
             HookBreakerFailureThreshold = breakerFailureThreshold,
             HookBreakerOpenDuration = TimeSpan.FromMilliseconds(breakerOpenMs),
             DrainTimeout = drainTimeoutSeconds == 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(drainTimeoutSeconds),
+
+            GrpcBreakerFailureThreshold = grpcBreakerFailureThreshold,
+            GrpcBreakerOpenDuration = TimeSpan.FromMilliseconds(grpcBreakerOpenMs),
         };
     }
 

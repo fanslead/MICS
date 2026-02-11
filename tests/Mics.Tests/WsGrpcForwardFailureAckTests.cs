@@ -50,6 +50,8 @@ public sealed class WsGrpcForwardFailureAckTests
             admission: new NoopAdmission(),
             nodes: new EmptyNodeSnapshot(),
             nodeClients: new FailingNodeClientPool(StatusCode.Unavailable),
+            grpcBreaker: new GrpcNodeCircuitBreaker(TimeProvider.System),
+            grpcBreakerPolicy: new GrpcBreakerPolicy(5, TimeSpan.FromSeconds(5)),
             offline: new RejectOffline(),
             rateLimiter: new AllowRateLimiter(),
             dedup: new AllowDedup(),

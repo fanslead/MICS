@@ -284,6 +284,29 @@ public sealed class GroupFanoutPlannerTests
     }
 }
 
+public sealed class LocalRouteCacheTests
+{
+    [Fact]
+    public void SetThenGetThenInvalidate_Works()
+    {
+        var cache = new Mics.Gateway.Infrastructure.LocalRouteCache(1 * 1024 * 1024);
+
+        var routes = new Dictionary<string, OnlineDeviceRoute>(StringComparer.Ordinal)
+        {
+            ["d1"] = new OnlineDeviceRoute("n1", "http://n1", "c1", 1),
+        };
+
+        cache.Set("t1", "u1", routes, TimeSpan.FromSeconds(5));
+
+        Assert.True(cache.TryGet("t1", "u1", out var got));
+        Assert.Single(got);
+        Assert.Equal("n1", got["d1"].NodeId);
+
+        cache.Invalidate("t1", "u1");
+        Assert.False(cache.TryGet("t1", "u1", out _));
+    }
+}
+
 public sealed class HmacSignTests
 {
     [Fact]

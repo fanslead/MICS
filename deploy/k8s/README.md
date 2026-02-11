@@ -30,9 +30,18 @@ kubectl apply -f deploy/k8s/gateway.ingress.yaml
 ```
 
 Notes:
-- This ingress only routes WebSocket `/ws` to the `mics-gateway` Service (load-balanced).
+- Production should terminate TLS at the edge and clients must use `wss://.../ws`.
+  - Example TLS secret (manual):
+    ```bash
+    kubectl -n mics create secret tls mics-gateway-tls \
+      --cert=./tls/tls.crt \
+      --key=./tls/tls.key
+    ```
+  - Or use cert-manager and set the Ingress TLS secret accordingly.
+- This ingress only routes WebSocket `/ws` to the `mics-gateway` Service (load-balanced). The gateway can stay HTTP behind the Ingress.
 - Inter-node gRPC forwarding uses `PUBLIC_ENDPOINT` stored in Redis and should point to the **specific pod**
   via `mics-gateway-headless` DNS (`http://<podname>.mics-gateway-headless:8080`).
+  This is intended for in-cluster traffic and is not exposed by the Ingress.
 
 ## HPA
 

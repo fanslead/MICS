@@ -3,10 +3,16 @@ kind: Ingress
 metadata:
   name: mics-gateway
   annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
 spec:
+  tls:
+    - hosts:
+        - mics.example.com
+      secretName: mics-gateway-tls
   rules:
     - host: mics.example.com
       http:
