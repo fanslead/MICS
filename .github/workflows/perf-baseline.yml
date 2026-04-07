@@ -3,6 +3,9 @@ name: perf-baseline
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   perf-baseline:
     runs-on: ubuntu-latest
@@ -15,7 +18,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Run perf baseline capture
-        run: bash /home/runner/work/MICS/MICS/scripts/perf-baseline.sh "$RUNNER_TEMP/mics-perf-baseline"
+        run: bash ${{ github.workspace }}/scripts/perf-baseline.sh "$RUNNER_TEMP/mics-perf-baseline"
 
       - name: Upload perf artifacts
         if: always()

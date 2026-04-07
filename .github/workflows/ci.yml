@@ -5,6 +5,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   regression:
     runs-on: ubuntu-latest
@@ -52,23 +55,23 @@ jobs:
 
       - name: Publish gateway NativeAOT
         run: >
-          dotnet publish /home/runner/work/MICS/MICS/src/Mics.Gateway/Mics.Gateway.csproj
+          dotnet publish ${{ github.workspace }}/src/Mics.Gateway/Mics.Gateway.csproj
           -c Release
           -r linux-x64
           -p:PublishAot=true
           -p:SelfContained=true
           -p:InvariantGlobalization=true
-          -o /home/runner/work/MICS/MICS/artifacts/publish/gateway
+          -o ${{ github.workspace }}/artifacts/publish/gateway
 
       - name: Publish hookmock NativeAOT
         run: >
-          dotnet publish /home/runner/work/MICS/MICS/src/Mics.HookMock/Mics.HookMock.csproj
+          dotnet publish ${{ github.workspace }}/src/Mics.HookMock/Mics.HookMock.csproj
           -c Release
           -r linux-x64
           -p:PublishAot=true
           -p:SelfContained=true
           -p:InvariantGlobalization=true
-          -o /home/runner/work/MICS/MICS/artifacts/publish/hookmock
+          -o ${{ github.workspace }}/artifacts/publish/hookmock
 
   deployment-smoke:
     runs-on: ubuntu-latest
@@ -82,24 +85,24 @@ jobs:
           version: latest
 
       - name: Validate docker-compose stack
-        run: docker compose -f /home/runner/work/MICS/MICS/docker-compose.e2e.yml config >/dev/null
+        run: docker compose -f ${{ github.workspace }}/docker-compose.e2e.yml config >/dev/null
 
       - name: Validate Kubernetes manifests
         run: |
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/gateway.configmap.yaml
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/gateway.headless.service.yaml
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/gateway.service.yaml
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/gateway.pdb.yaml
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/gateway.deployment.yaml
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/gateway.hpa.yaml
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/gateway.ingress.yaml
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/monitoring/gateway-servicemonitor.yaml
-          kubectl apply --dry-run=client -f /home/runner/work/MICS/MICS/deploy/k8s/monitoring/gateway-prometheusrule.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.configmap.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.headless.service.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.service.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.pdb.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.deployment.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.hpa.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.ingress.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/monitoring/gateway-servicemonitor.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/monitoring/gateway-prometheusrule.yaml
 
       - name: Build docker images
         run: |
-          docker build -f /home/runner/work/MICS/MICS/deploy/docker/Dockerfile.gateway -t mics-gateway-ci /home/runner/work/MICS/MICS
-          docker build -f /home/runner/work/MICS/MICS/deploy/docker/Dockerfile.hookmock -t mics-hookmock-ci /home/runner/work/MICS/MICS
+          docker build -f ${{ github.workspace }}/deploy/docker/Dockerfile.gateway -t mics-gateway-ci ${{ github.workspace }}
+          docker build -f ${{ github.workspace }}/deploy/docker/Dockerfile.hookmock -t mics-hookmock-ci ${{ github.workspace }}
 
   e2e-smoke:
     runs-on: ubuntu-latest
@@ -115,7 +118,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Run E2E smoke
-        run: bash /home/runner/work/MICS/MICS/scripts/e2e-smoke.sh "$RUNNER_TEMP/mics-e2e-smoke"
+        run: bash ${{ github.workspace }}/scripts/e2e-smoke.sh "$RUNNER_TEMP/mics-e2e-smoke"
 
       - name: Upload E2E artifacts
         if: always()
