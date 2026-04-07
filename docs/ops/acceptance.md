@@ -23,6 +23,16 @@ Linux：
 
 本地联调参考：`README.md:1`
 
+自动化入口：
+
+```bash
+# Redis + Kafka + Hook + 双 Gateway 的端到端烟测
+bash ./scripts/e2e-smoke.sh /tmp/mics-e2e-smoke
+
+# 手动触发的性能基线留档
+bash ./scripts/perf-baseline.sh /tmp/mics-perf-baseline
+```
+
 ## 1. 接口/功能验收（8.1 / 8.3）
 
 ### 1.1 建连与错误码（6.2.1）
@@ -101,6 +111,12 @@ dotnet run --project tools/Mics.LoadTester -- --url ws://localhost:8080/ws --ten
 - 日志：`hook_request_failed tenant/op/result/url/requestId`（已限频）
 - 若启用降级策略：`mics_hook_check_message_total{result="degraded"}` 上升但消息仍可投递（取决于租户策略）
 
+HookMock 自动化故障注入环境变量（可配合 `docker-compose.e2e.yml` / `scripts/e2e-smoke.sh` 使用）：
+- `HOOK_AUTH_DELAY_MS` / `HOOK_AUTH_STATUS_CODE`
+- `HOOK_CHECK_MESSAGE_DELAY_MS` / `HOOK_CHECK_MESSAGE_STATUS_CODE`
+- `HOOK_GET_GROUP_MEMBERS_DELAY_MS` / `HOOK_GET_GROUP_MEMBERS_STATUS_CODE`
+- `HOOK_GET_OFFLINE_MESSAGES_DELAY_MS` / `HOOK_GET_OFFLINE_MESSAGES_STATUS_CODE`
+
 ## 3. 集群验收（8.1 / 8.4）
 
 目标：验证跨节点转发与节点故障清理。
@@ -116,6 +132,14 @@ dotnet run --project tools/Mics.LoadTester -- --url ws://localhost:8080/ws --ten
 - 指标：`mics_dead_node_cleanups_total` 增加后，路由应被清理
 - 日志：`dead_node_cleanup_start/done`
 
+自动化脚本 `scripts/e2e-smoke.sh` 默认覆盖：
+- 双节点 WebSocket 建连
+- 双节点单聊 + 跨节点 gRPC 转发
+- Kafka MQ publish 指标检查
+- Hook `/check-message` 超时降级
+- graceful stop 的 `shutdown_drain_begin/done`
+- dead-node cleanup 指标检查（依赖 `NODE_TTL_SECONDS=5`）
+
 ## 4. 部署运维验收入口（8.4）
 
 K8s 示例清单：
@@ -128,3 +152,23 @@ K8s 示例清单：
 
 说明：
 - CPU HPA 可直接使用；“按连接数”扩缩容需要 Prometheus Adapter 将 `mics_ws_connections` 暴露为 Pods 自定义指标。
+
+## 5. 性能基线留档（8.2）
+
+`scripts/perf-baseline.sh` 会启动 `docker-compose.e2e.yml`，并输出以下基线文件：
+- `connect-only.log`
+- `heartbeat.log`
+- `single-chat-node-a.log`
+- `single-chat-node-b.log`
+- `group-chat.log`
+- `gateway-a.metrics`
+- `gateway-b.metrics`
+
+建议每次版本验收至少保留：
+- `connect_p50/p90/p99`
+- `ack_p50/p90/p99`
+- `delivery_p50/p90/p99`
+- `mics_messages_in_total`
+- `mics_deliveries_total`
+- `mics_grpc_forward_duration_ms`
+- `mics_mq_published_total`

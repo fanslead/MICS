@@ -132,4 +132,22 @@ if (Test-Path "sdk\\android\\mics-client-sdk\\gradlew.bat") {
   Pop-Location
 }
 
+if ($env:RUN_E2E_SMOKE -eq "1") {
+  if (Has-Cmd docker -and Has-Cmd bash) {
+    $outDir = if ($env:E2E_ARTIFACTS_DIR) { $env:E2E_ARTIFACTS_DIR } else { Join-Path $env:TEMP "mics-e2e-smoke" }
+    Run "bash" @("./scripts/e2e-smoke.sh", $outDir)
+  } else {
+    Write-Host "SKIP E2E smoke (missing docker or bash)"
+  }
+}
+
+if ($env:RUN_PERF_BASELINE -eq "1") {
+  if (Has-Cmd docker -and Has-Cmd bash) {
+    $outDir = if ($env:PERF_ARTIFACTS_DIR) { $env:PERF_ARTIFACTS_DIR } else { Join-Path $env:TEMP "mics-perf-baseline" }
+    Run "bash" @("./scripts/perf-baseline.sh", $outDir)
+  } else {
+    Write-Host "SKIP perf baseline (missing docker or bash)"
+  }
+}
+
 Write-Host "OK"

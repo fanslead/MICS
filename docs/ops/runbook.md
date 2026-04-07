@@ -82,6 +82,11 @@ kubectl -n mics rollout status deploy/mics-gateway
 - `mics_hook_requests_total{result!="ok"}`
 - `mics_hook_limiter_rejected_total`
 
+自动化演练建议：
+- 使用 `HOOK_CHECK_MESSAGE_DELAY_MS=250` 重启 HookMock，可稳定触发默认 `150ms` 超时
+- 使用 `HOOK_CHECK_MESSAGE_STATUS_CODE=500` 可验证 HTTP 5xx 熔断/降级
+- 推荐直接执行 `bash ./scripts/e2e-smoke.sh /tmp/mics-e2e-smoke`，脚本会留存 metrics / logs 便于回归比较
+
 ### 4.4 Kafka 不可用
 
 说明：
@@ -90,3 +95,12 @@ kubectl -n mics rollout status deploy/mics-gateway
 指标参考：
 - `mics_mq_failed_total` / `mics_mq_retried_total` / `mics_mq_dlq_total`
 
+## 5) 自动化回归入口
+
+- 全仓回归：`bash ./scripts/verify.sh`
+- 全仓回归 + 端到端烟测：`RUN_E2E_SMOKE=1 bash ./scripts/verify.sh`
+- 手动性能基线：`bash ./scripts/perf-baseline.sh /tmp/mics-perf-baseline`
+
+CI/CD 对齐：
+- `/.github/workflows/ci.yml`：SDK/Gateway 回归、NativeAOT 发布、Docker/K8s smoke、端到端烟测
+- `/.github/workflows/perf-baseline.yml`：手动触发性能基线留档与 artifact 上传

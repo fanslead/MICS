@@ -144,4 +144,20 @@ if [[ -f sdk/android/mics-client-sdk/gradlew ]]; then
   popd >/dev/null
 fi
 
+if [[ "${RUN_E2E_SMOKE:-0}" == "1" ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    run bash ./scripts/e2e-smoke.sh "${E2E_ARTIFACTS_DIR:-${TMPDIR:-/tmp}/mics-e2e-smoke}"
+  else
+    echo "SKIP E2E smoke (missing docker)" >&2
+  fi
+fi
+
+if [[ "${RUN_PERF_BASELINE:-0}" == "1" ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    run bash ./scripts/perf-baseline.sh "${PERF_ARTIFACTS_DIR:-${TMPDIR:-/tmp}/mics-perf-baseline}"
+  else
+    echo "SKIP perf baseline (missing docker)" >&2
+  fi
+fi
+
 echo "OK"

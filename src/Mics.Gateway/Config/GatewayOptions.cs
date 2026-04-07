@@ -98,6 +98,7 @@ internal sealed class GatewayOptions
         var tenantHookMaxConcurrency = LoadTenantHookMaxConcurrency(config);
         var breakerFailureThreshold = Math.Clamp(config.GetValue("HOOK_BREAKER_FAILURE_THRESHOLD", 5), 1, 100);
         var breakerOpenMs = Math.Clamp(config.GetValue("HOOK_BREAKER_OPEN_MS", 5_000), 0, 60_000);
+        var nodeTtlSeconds = Math.Clamp(config.GetValue("NODE_TTL_SECONDS", 30), 1, 600);
         var drainTimeoutSeconds = Math.Clamp(config.GetValue("DRAIN_TIMEOUT_SECONDS", 10), 0, 600);
 
         var grpcBreakerFailureThreshold = Math.Clamp(config.GetValue("GRPC_BREAKER_FAILURE_THRESHOLD", 5), 1, 100);
@@ -138,11 +139,12 @@ internal sealed class GatewayOptions
             TenantHookSecrets = tenantHookSecrets,
             HookSignRequired = hookSignRequired,
             HookMaxConcurrencyDefault = hookMaxConcurrencyDefault,
-            HookQueueTimeout = TimeSpan.FromMilliseconds(Math.Clamp(hookQueueTimeoutMs, 0, 10_000)),
-            TenantHookMaxConcurrency = tenantHookMaxConcurrency,
-            HookBreakerFailureThreshold = breakerFailureThreshold,
-            HookBreakerOpenDuration = TimeSpan.FromMilliseconds(breakerOpenMs),
-            DrainTimeout = drainTimeoutSeconds == 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(drainTimeoutSeconds),
+             HookQueueTimeout = TimeSpan.FromMilliseconds(Math.Clamp(hookQueueTimeoutMs, 0, 10_000)),
+             TenantHookMaxConcurrency = tenantHookMaxConcurrency,
+             HookBreakerFailureThreshold = breakerFailureThreshold,
+             HookBreakerOpenDuration = TimeSpan.FromMilliseconds(breakerOpenMs),
+             NodeTtl = TimeSpan.FromSeconds(nodeTtlSeconds),
+             DrainTimeout = drainTimeoutSeconds == 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(drainTimeoutSeconds),
 
             GrpcBreakerFailureThreshold = grpcBreakerFailureThreshold,
             GrpcBreakerOpenDuration = TimeSpan.FromMilliseconds(grpcBreakerOpenMs),
