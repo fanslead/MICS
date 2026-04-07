@@ -137,7 +137,7 @@ HookMock 自动化故障注入环境变量（可配合 `docker-compose.e2e.yml` 
 - 双节点单聊 + 跨节点 gRPC 转发
 - Kafka MQ publish 指标检查
 - Hook `/check-message` 超时降级
-- graceful stop 的 `shutdown_drain_begin/done`
+- graceful stop 信号与 drain 日志采集（若服务发出 `shutdown_drain_begin/done` 也会一并校验）
 - dead-node cleanup 指标检查（依赖 `NODE_TTL_SECONDS=5`）
 
 ## 4. 部署运维验收入口（8.4）

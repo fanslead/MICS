@@ -27,16 +27,24 @@ if (string.IsNullOrWhiteSpace(options.RedisConnection))
 }
 
 var listenPort = builder.Configuration.GetValue("PORT", 8080);
+var grpcPort = builder.Configuration.GetValue("GRPC_PORT", listenPort);
 builder.WebHost.ConfigureKestrel(k =>
 {
-    k.ListenAnyIP(listenPort, o => o.Protocols = HttpProtocols.Http1AndHttp2);
+    if (grpcPort == listenPort)
+    {
+        k.ListenAnyIP(listenPort, o => o.Protocols = HttpProtocols.Http1AndHttp2);
+        return;
+    }
+
+    k.ListenAnyIP(listenPort, o => o.Protocols = HttpProtocols.Http1);
+    k.ListenAnyIP(grpcPort, o => o.Protocols = HttpProtocols.Http2);
 });
 
 var publicEndpoint = options.PublicEndpoint;
 if (string.IsNullOrWhiteSpace(publicEndpoint))
 {
-    // For local/dev, default to current listen port.
-    publicEndpoint = $"http://localhost:{listenPort}";
+    // For local/dev, default to the gRPC port used for inter-node forwarding.
+    publicEndpoint = $"http://localhost:{grpcPort}";
 }
 
 var mux = await ConnectionMultiplexer.ConnectAsync(options.RedisConnection);

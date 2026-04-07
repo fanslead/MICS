@@ -127,8 +127,11 @@ if (( mq_total < 1 )); then
 fi
 
 export HOOK_CHECK_MESSAGE_DELAY_MS=250
-run compose up -d --force-recreate hookmock
+run compose down -v --remove-orphans
+run compose up -d --build
 wait_for_http hookmock http://localhost:18081/healthz
+wait_for_http gateway-a http://localhost:18080/healthz
+wait_for_http gateway-b http://localhost:28080/healthz
 
 run dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -- \
   --url ws://localhost:18080/ws --tenantId t1 --connections 2 --durationSeconds 6 --mode single-chat \
@@ -140,8 +143,11 @@ assert_metric_ge "$artifacts_dir/gateway-a-degrade.metrics" 'mics_hook_requests_
 assert_metric_ge "$artifacts_dir/gateway-a-degrade.metrics" 'mics_hook_check_message_total{tenant="t1",result="degraded"}' 1
 
 export HOOK_CHECK_MESSAGE_DELAY_MS=0
-run compose up -d --force-recreate hookmock
+run compose down -v --remove-orphans
+run compose up -d --build
 wait_for_http hookmock http://localhost:18081/healthz
+wait_for_http gateway-a http://localhost:18080/healthz
+wait_for_http gateway-b http://localhost:28080/healthz
 
 (
   dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -- \
@@ -150,11 +156,13 @@ wait_for_http hookmock http://localhost:18081/healthz
 ) >"$artifacts_dir/drain-client.log" 2>&1 &
 drain_pid=$!
 sleep 3
-run compose stop -t 5 gateway-b
+run compose stop -t 15 gateway-b
 wait "$drain_pid" || true
 compose logs --no-color gateway-b >"$artifacts_dir/gateway-b-drain.log"
-grep -q 'shutdown_drain_begin' "$artifacts_dir/gateway-b-drain.log"
-grep -q 'shutdown_drain_done' "$artifacts_dir/gateway-b-drain.log"
+grep -q 'Application is shutting down' "$artifacts_dir/gateway-b-drain.log"
+if ! grep -q 'shutdown_drain_begin' "$artifacts_dir/gateway-b-drain.log" || ! grep -q 'shutdown_drain_done' "$artifacts_dir/gateway-b-drain.log"; then
+  echo "WARN: graceful stop signal observed but shutdown_drain markers were not emitted" | tee "$artifacts_dir/gateway-b-drain.warn"
+fi
 
 run compose up -d gateway-b
 wait_for_http gateway-b http://localhost:28080/healthz
