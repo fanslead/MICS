@@ -19,6 +19,11 @@ app.MapGet("/readyz", () => Results.Text("ok"));
 
 app.MapPost("/auth", async (HttpContext ctx) =>
 {
+    if (await MaybeDelayOrFailAsync(ctx, builder.Configuration, "AUTH"))
+    {
+        return;
+    }
+
     var request = await ReadProtobufAsync(AuthRequest.Parser, ctx.Request);
     var tenantId = request.Meta?.TenantId ?? string.Empty;
     tenantPolicies.TryGetValue(tenantId, out var policyOverride);
@@ -103,6 +108,11 @@ app.MapPost("/auth", async (HttpContext ctx) =>
 
 app.MapPost("/check-message", async (HttpContext ctx) =>
 {
+    if (await MaybeDelayOrFailAsync(ctx, builder.Configuration, "CHECK_MESSAGE"))
+    {
+        return;
+    }
+
     var request = await ReadProtobufAsync(CheckMessageRequest.Parser, ctx.Request);
     var tenantId = request.Meta?.TenantId ?? string.Empty;
     var signRequired = ResolveHookSignRequired(tenantId, tenantPolicies, builder.Configuration);
@@ -155,6 +165,11 @@ app.MapPost("/check-message", async (HttpContext ctx) =>
 
 app.MapPost("/get-group-members", async (HttpContext ctx) =>
 {
+    if (await MaybeDelayOrFailAsync(ctx, builder.Configuration, "GET_GROUP_MEMBERS"))
+    {
+        return;
+    }
+
     var request = await ReadProtobufAsync(GetGroupMembersRequest.Parser, ctx.Request);
     var tenantId = request.Meta?.TenantId ?? string.Empty;
     var signRequired = ResolveHookSignRequired(tenantId, tenantPolicies, builder.Configuration);
@@ -199,6 +214,11 @@ app.MapPost("/get-group-members", async (HttpContext ctx) =>
 
 app.MapPost("/get-offline-messages", async (HttpContext ctx) =>
 {
+    if (await MaybeDelayOrFailAsync(ctx, builder.Configuration, "GET_OFFLINE_MESSAGES"))
+    {
+        return;
+    }
+
     var request = await ReadProtobufAsync(GetOfflineMessagesRequest.Parser, ctx.Request);
     var tenantId = request.Meta?.TenantId ?? string.Empty;
     var signRequired = ResolveHookSignRequired(tenantId, tenantPolicies, builder.Configuration);
@@ -253,6 +273,25 @@ app.MapPost("/get-offline-messages", async (HttpContext ctx) =>
 });
 
 app.Run();
+
+static async ValueTask<bool> MaybeDelayOrFailAsync(HttpContext ctx, IConfiguration config, string operation)
+{
+    var delayMs = GetChaosInt(config, operation, "DELAY_MS");
+    if (delayMs > 0)
+    {
+        await Task.Delay(delayMs, ctx.RequestAborted);
+    }
+
+    var statusCode = GetChaosInt(config, operation, "STATUS_CODE");
+    if (statusCode <= 0)
+    {
+        return false;
+    }
+
+    ctx.Response.StatusCode = statusCode;
+    await ctx.Response.WriteAsync($"hookmock forced {operation} status {statusCode}", ctx.RequestAborted);
+    return true;
+}
 
 static HookMeta EchoMeta(HookMeta? meta) =>
     meta is null
@@ -320,6 +359,21 @@ static Dictionary<string, TenantHookPolicyOverride> LoadTenantPolicies(IConfigur
 
 static bool TryGetTenantSecret(Dictionary<string, string> secrets, string tenantId, out string tenantSecret) =>
     secrets.TryGetValue(tenantId, out tenantSecret!) && !string.IsNullOrWhiteSpace(tenantSecret);
+
+static int GetChaosInt(IConfiguration config, string operation, string suffix)
+{
+    if (TryGetInt(config, $"HOOK_{operation}_{suffix}", out var specific))
+    {
+        return Math.Max(0, specific);
+    }
+
+    if (TryGetInt(config, $"HOOK_{suffix}", out var global))
+    {
+        return Math.Max(0, global);
+    }
+
+    return 0;
+}
 
 static void ApplyHookPolicyOverrides(TenantRuntimeConfig cfg, TenantHookPolicyOverride? policyOverride, IConfiguration config)
 {

@@ -153,6 +153,19 @@ dotnet run --project tools/Mics.LoadTester -- `
 - HPA：`docs/ops/hpa.md`
 - 验收 Playbook：`docs/ops/acceptance.md`
 
+自动化验收入口：
+
+```bash
+# 全仓回归
+bash ./scripts/verify.sh
+
+# 全仓回归 + 双节点 E2E 烟测
+RUN_E2E_SMOKE=1 bash ./scripts/verify.sh
+
+# 手动性能基线留档
+bash ./scripts/perf-baseline.sh /tmp/mics-perf-baseline
+```
+
 ## 一键回归（全仓）
 
 ```powershell
@@ -162,4 +175,3 @@ dotnet run --project tools/Mics.LoadTester -- `
 ```bash
 ./scripts/verify.sh
 ```
-

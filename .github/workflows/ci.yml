@@ -1,0 +1,128 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: dart-lang/setup-dart@v1
+
+      - name: Run repository verification
+        run: bash ./scripts/verify.sh
+
+  publish-aot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: regression
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install NativeAOT prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang zlib1g-dev
+
+      - name: Publish gateway NativeAOT
+        run: >
+          dotnet publish ${{ github.workspace }}/src/Mics.Gateway/Mics.Gateway.csproj
+          -c Release
+          -r linux-x64
+          -p:PublishAot=true
+          -p:SelfContained=true
+          -p:InvariantGlobalization=true
+          -o ${{ github.workspace }}/artifacts/publish/gateway
+
+      - name: Publish hookmock NativeAOT
+        run: >
+          dotnet publish ${{ github.workspace }}/src/Mics.HookMock/Mics.HookMock.csproj
+          -c Release
+          -r linux-x64
+          -p:PublishAot=true
+          -p:SelfContained=true
+          -p:InvariantGlobalization=true
+          -o ${{ github.workspace }}/artifacts/publish/hookmock
+
+  deployment-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: regression
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Validate docker-compose stack
+        run: docker compose -f ${{ github.workspace }}/docker-compose.e2e.yml config >/dev/null
+
+      - name: Validate Kubernetes manifests
+        run: |
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.configmap.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.headless.service.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.service.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.pdb.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.deployment.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.hpa.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/gateway.ingress.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/monitoring/gateway-servicemonitor.yaml
+          kubectl apply --dry-run=client -f ${{ github.workspace }}/deploy/k8s/monitoring/gateway-prometheusrule.yaml
+
+      - name: Build docker images
+        run: |
+          docker build -f ${{ github.workspace }}/deploy/docker/Dockerfile.gateway -t mics-gateway-ci ${{ github.workspace }}
+          docker build -f ${{ github.workspace }}/deploy/docker/Dockerfile.hookmock -t mics-hookmock-ci ${{ github.workspace }}
+
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs:
+      - publish-aot
+      - deployment-smoke
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run E2E smoke
+        run: bash ${{ github.workspace }}/scripts/e2e-smoke.sh "$RUNNER_TEMP/mics-e2e-smoke"
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mics-e2e-smoke
+          path: ${{ runner.temp }}/mics-e2e-smoke

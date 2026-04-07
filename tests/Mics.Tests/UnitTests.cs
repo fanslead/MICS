@@ -109,6 +109,21 @@ public sealed class GatewayOptionsTests
     }
 
     [Fact]
+    public void Load_NodeTtlSeconds_FromEnv()
+    {
+        var cfg = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["NODE_TTL_SECONDS"] = "5",
+                ["REDIS__CONNECTION"] = "localhost:6379",
+            })
+            .Build();
+
+        var options = GatewayOptions.Load(cfg);
+        Assert.Equal(TimeSpan.FromSeconds(5), options.NodeTtl);
+    }
+
+    [Fact]
     public void Load_GroupFanoutOptions_FromEnv()
     {
         var cfg = new ConfigurationBuilder()

@@ -1,0 +1,113 @@
+services:
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "16379:6379"
+
+  kafka:
+    image: apache/kafka:3.9.0
+    ports:
+      - "19092:9092"
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  hookmock:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.hookmock
+    depends_on:
+      - redis
+      - kafka
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8081
+      HOOK_BASE_URL: http://hookmock:8081
+      HOOK_TENANT_SECRETS: '{"t1":"dev-secret-t1"}'
+      HOOK_GROUP_MEMBERS: '{"group-1":["u1","u2","u3","u4"]}'
+      HOOK_SIGN_REQUIRED: "true"
+      HOOK_MAX_CONCURRENCY: "8"
+      HOOK_QUEUE_TIMEOUT_MS: "10"
+      HOOK_BREAKER_FAILURE_THRESHOLD: "2"
+      HOOK_BREAKER_OPEN_MS: "1000"
+      OFFLINE_USE_HOOK_PULL: "true"
+      HOOK_AUTH_DELAY_MS: ${HOOK_AUTH_DELAY_MS:-0}
+      HOOK_AUTH_STATUS_CODE: ${HOOK_AUTH_STATUS_CODE:-0}
+      HOOK_CHECK_MESSAGE_DELAY_MS: ${HOOK_CHECK_MESSAGE_DELAY_MS:-0}
+      HOOK_CHECK_MESSAGE_STATUS_CODE: ${HOOK_CHECK_MESSAGE_STATUS_CODE:-0}
+      HOOK_GET_GROUP_MEMBERS_DELAY_MS: ${HOOK_GET_GROUP_MEMBERS_DELAY_MS:-0}
+      HOOK_GET_GROUP_MEMBERS_STATUS_CODE: ${HOOK_GET_GROUP_MEMBERS_STATUS_CODE:-0}
+      HOOK_GET_OFFLINE_MESSAGES_DELAY_MS: ${HOOK_GET_OFFLINE_MESSAGES_DELAY_MS:-0}
+      HOOK_GET_OFFLINE_MESSAGES_STATUS_CODE: ${HOOK_GET_OFFLINE_MESSAGES_STATUS_CODE:-0}
+    ports:
+      - "18081:8081"
+
+  gateway-a:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.gateway
+    depends_on:
+      - redis
+      - kafka
+      - hookmock
+    environment:
+      PORT: 8080
+      GRPC_PORT: 5000
+      REDIS__CONNECTION: redis:6379
+      TENANT_AUTH_MAP: '{"t1":"http://hookmock:8081"}'
+      TENANT_HOOK_SECRETS: '{"t1":"dev-secret-t1"}'
+      HOOK_SIGN_REQUIRED: "true"
+      HOOK_MAX_CONCURRENCY: "32"
+      HOOK_QUEUE_TIMEOUT_MS: "10"
+      HOOK_BREAKER_FAILURE_THRESHOLD: "2"
+      HOOK_BREAKER_OPEN_MS: "1000"
+      NODE_TTL_SECONDS: "5"
+      DRAIN_TIMEOUT_SECONDS: "2"
+      NODE_ID: node-a
+      PUBLIC_ENDPOINT: http://gateway-a:5000
+      CLUSTER_GRPC_TOKEN: cluster-secret
+      KAFKA__BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_MAX_ATTEMPTS: "3"
+      KAFKA_QUEUE_CAPACITY: "5000"
+    ports:
+      - "18080:8080"
+
+  gateway-b:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.gateway
+    depends_on:
+      - redis
+      - kafka
+      - hookmock
+    environment:
+      PORT: 8080
+      GRPC_PORT: 5000
+      REDIS__CONNECTION: redis:6379
+      TENANT_AUTH_MAP: '{"t1":"http://hookmock:8081"}'
+      TENANT_HOOK_SECRETS: '{"t1":"dev-secret-t1"}'
+      HOOK_SIGN_REQUIRED: "true"
+      HOOK_MAX_CONCURRENCY: "32"
+      HOOK_QUEUE_TIMEOUT_MS: "10"
+      HOOK_BREAKER_FAILURE_THRESHOLD: "2"
+      HOOK_BREAKER_OPEN_MS: "1000"
+      NODE_TTL_SECONDS: "5"
+      DRAIN_TIMEOUT_SECONDS: "2"
+      NODE_ID: node-b
+      PUBLIC_ENDPOINT: http://gateway-b:5000
+      CLUSTER_GRPC_TOKEN: cluster-secret
+      KAFKA__BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_MAX_ATTEMPTS: "3"
+      KAFKA_QUEUE_CAPACITY: "5000"
+    ports:
+      - "28080:8080"

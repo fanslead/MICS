@@ -1,0 +1,28 @@
+name: perf-baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  perf-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run perf baseline capture
+        run: bash ${{ github.workspace }}/scripts/perf-baseline.sh "$RUNNER_TEMP/mics-perf-baseline"
+
+      - name: Upload perf artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mics-perf-baseline
+          path: ${{ runner.temp }}/mics-perf-baseline
