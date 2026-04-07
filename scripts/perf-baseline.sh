@@ -48,28 +48,30 @@ export HOOK_GET_GROUP_MEMBERS_STATUS_CODE=0
 export HOOK_GET_OFFLINE_MESSAGES_DELAY_MS=0
 export HOOK_GET_OFFLINE_MESSAGES_STATUS_CODE=0
 
-run compose up -d --build
+run dotnet build "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -c Release
+run compose build
+run compose up -d
 wait_for_http hookmock http://localhost:18081/healthz
 wait_for_http gateway-a http://localhost:18080/healthz
 wait_for_http gateway-b http://localhost:28080/healthz
 
-run dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -- \
+run dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -c Release --no-build -- \
   --url ws://localhost:18080/ws --tenantId t1 --connections 50 --rampSeconds 5 --durationSeconds 20 --mode connect-only \
   | tee "$artifacts_dir/connect-only.log"
 
-run dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -- \
+run dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -c Release --no-build -- \
   --url ws://localhost:18080/ws --tenantId t1 --connections 50 --rampSeconds 5 --durationSeconds 20 --mode heartbeat --sendQpsPerConn 1 \
   | tee "$artifacts_dir/heartbeat.log"
 
 (
-  dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -- \
+  dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -c Release --no-build -- \
     --url ws://localhost:18080/ws --tenantId t1 --connections 40 --rampSeconds 4 --durationSeconds 20 --mode single-chat \
     --sendQpsPerConn 2 --payloadBytes 128 --devicePrefix perf-a-
 ) | tee "$artifacts_dir/single-chat-node-a.log" &
 pid_a=$!
 
 (
-  dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -- \
+  dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -c Release --no-build -- \
     --url ws://localhost:28080/ws --tenantId t1 --connections 40 --rampSeconds 4 --durationSeconds 20 --mode single-chat \
     --sendQpsPerConn 2 --payloadBytes 128 --devicePrefix perf-b-
 ) | tee "$artifacts_dir/single-chat-node-b.log" &
@@ -78,7 +80,7 @@ pid_b=$!
 wait "$pid_a"
 wait "$pid_b"
 
-run dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -- \
+run dotnet run --project "$repo_root/tools/Mics.LoadTester/Mics.LoadTester.csproj" -c Release --no-build -- \
   --url ws://localhost:18080/ws --tenantId t1 --connections 40 --rampSeconds 4 --durationSeconds 20 --mode group-chat \
   --groupId group-1 --sendQpsPerConn 1 --payloadBytes 128 --devicePrefix perf-group- \
   | tee "$artifacts_dir/group-chat.log"

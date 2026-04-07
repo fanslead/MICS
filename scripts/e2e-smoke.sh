@@ -68,7 +68,8 @@ export HOOK_GET_GROUP_MEMBERS_STATUS_CODE="${HOOK_GET_GROUP_MEMBERS_STATUS_CODE:
 export HOOK_GET_OFFLINE_MESSAGES_DELAY_MS="${HOOK_GET_OFFLINE_MESSAGES_DELAY_MS:-0}"
 export HOOK_GET_OFFLINE_MESSAGES_STATUS_CODE="${HOOK_GET_OFFLINE_MESSAGES_STATUS_CODE:-0}"
 
-run compose up -d --build
+run compose build
+run compose up -d
 wait_for_http hookmock http://localhost:18081/healthz
 wait_for_http gateway-a http://localhost:18080/healthz
 wait_for_http gateway-b http://localhost:28080/healthz
@@ -128,7 +129,7 @@ fi
 
 export HOOK_CHECK_MESSAGE_DELAY_MS=250
 run compose down -v --remove-orphans
-run compose up -d --build
+run compose up -d
 wait_for_http hookmock http://localhost:18081/healthz
 wait_for_http gateway-a http://localhost:18080/healthz
 wait_for_http gateway-b http://localhost:28080/healthz
@@ -144,7 +145,7 @@ assert_metric_ge "$artifacts_dir/gateway-a-degrade.metrics" 'mics_hook_check_mes
 
 export HOOK_CHECK_MESSAGE_DELAY_MS=0
 run compose down -v --remove-orphans
-run compose up -d --build
+run compose up -d
 wait_for_http hookmock http://localhost:18081/healthz
 wait_for_http gateway-a http://localhost:18080/healthz
 wait_for_http gateway-b http://localhost:28080/healthz
